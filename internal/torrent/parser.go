@@ -3,9 +3,11 @@ package torrent
 import (
 	"bufio"
 	"crypto/sha1"
+	"errors"
 	"fmt"
-	"github.com/SiddharthPalod/SidTorrent/internal/bencode"
 	"os"
+
+	"github.com/SiddharthPalod/SidTorrent/internal/bencode"
 )
 
 type TorrentFile struct {
@@ -18,6 +20,7 @@ type TorrentFile struct {
 }
 
 func Open(path string) (*TorrentFile, error) {
+
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
@@ -31,20 +34,74 @@ func Open(path string) (*TorrentFile, error) {
 		return nil, err
 	}
 
-	root := decoded.(map[string]interface{})
-	info := root["info"].(map[string]interface{})
+	root, ok := decoded.(map[string]interface{})
+	if !ok {
+		return nil, errors.New("invalid torrent root")
+	}
 
+	info, ok := root["info"].(map[string]interface{})
+	if !ok {
+		return nil, errors.New("missing info dictionary")
+	}
+
+	// DEBUG
+	fmt.Println("INFO DICT:")
+	for k, v := range info {
+		fmt.Printf("%s => %T => %v\n", k, v, v)
+	}
+
+	var totalLength int
+
+	// SINGLE FILE
+	if length, ok := info["length"].(int); ok {
+		totalLength = length
+	}
+
+	// MULTI FILE
+	if files, ok := info["files"].([]interface{}); ok {
+
+		for _, f := range files {
+
+			fileMap := f.(map[string]interface{})
+
+			if l, ok := fileMap["length"].(int); ok {
+				totalLength += l
+			}
+		}
+	}
+
+	if totalLength == 0 {
+		return nil, errors.New("could not determine torrent size")
+	}
+
+	name, ok := info["name"].(string)
+	if !ok {
+		return nil, errors.New("missing torrent name")
+	}
+
+	pieceLen, ok := info["piece length"].(int)
+	if !ok {
+		return nil, errors.New("missing piece length")
+	}
+
+	pieces, ok := info["pieces"].(string)
+	if !ok {
+		return nil, errors.New("missing pieces")
+	}
+
+	// TEMPORARY HASH
+	// Later we’ll properly bencode info dict before hashing
 	infoBytes := []byte(fmt.Sprintf("%v", info))
 	hash := sha1.Sum(infoBytes)
 
-	torrent := &TorrentFile{
+	tf := &TorrentFile{
 		Announce: root["announce"].(string),
-		Name:     info["name"].(string),
-		Length:   info["length"].(int),
-		PieceLen: info["piece length"].(int),
-		Pieces:   []byte(info["pieces"].(string)),
+		Name:     name,
+		Length:   totalLength,
+		PieceLen: pieceLen,
+		Pieces:   []byte(pieces),
 		InfoHash: hash,
 	}
 
-	return torrent, nil
+	return tf, nil
 }
