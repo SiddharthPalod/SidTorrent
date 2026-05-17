@@ -2,6 +2,8 @@ package peer
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
 )
 
@@ -15,6 +17,8 @@ const (
 	MsgRequest       = 6
 	MsgPiece         = 7
 )
+
+var ErrMalformedBitfield = errors.New("malformed bitfield")
 
 type Message struct {
 	ID      uint8
@@ -52,4 +56,24 @@ func (m *Message) Serialize() []byte {
 	buf[4] = m.ID
 	copy(buf[5:], m.Payload)
 	return buf
+}
+
+func ValidateBitfield(payload []byte, pieceCount int) error {
+	if pieceCount < 0 {
+		return fmt.Errorf("%w: negative piece count", ErrMalformedBitfield)
+	}
+	expectedLen := (pieceCount + 7) / 8
+	if len(payload) != expectedLen {
+		return fmt.Errorf("%w: got %d bytes, want %d", ErrMalformedBitfield, len(payload), expectedLen)
+	}
+	if pieceCount == 0 || pieceCount%8 == 0 {
+		return nil
+	}
+
+	spareBits := 8 - (pieceCount % 8)
+	mask := byte((1 << spareBits) - 1)
+	if payload[len(payload)-1]&mask != 0 {
+		return fmt.Errorf("%w: spare bits set", ErrMalformedBitfield)
+	}
+	return nil
 }

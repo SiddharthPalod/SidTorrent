@@ -1,8 +1,10 @@
-package bencode
+package tests
 
 import (
 	"bytes"
 	"testing"
+
+	"github.com/SiddharthPalod/SidTorrent/internal/bencode"
 )
 
 func TestDecodePrimitives(t *testing.T) {
@@ -18,7 +20,7 @@ func TestDecodePrimitives(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := DecodeBytes(tt.in)
+			got, err := bencode.DecodeBytes(tt.in)
 			if err != nil {
 				t.Fatalf("DecodeBytes() error = %v", err)
 			}
@@ -41,7 +43,7 @@ func TestDecodePrimitives(t *testing.T) {
 }
 
 func TestDecodePreservesBinaryStrings(t *testing.T) {
-	got, err := DecodeBytes([]byte("5:\x00\xffabc"))
+	got, err := bencode.DecodeBytes([]byte("5:\x00\xffabc"))
 	if err != nil {
 		t.Fatalf("DecodeBytes() error = %v", err)
 	}
@@ -57,7 +59,7 @@ func TestDecodePreservesBinaryStrings(t *testing.T) {
 }
 
 func TestDecodeDictKeysAreStrings(t *testing.T) {
-	got, err := DecodeBytes([]byte("d3:cow3:moo4:spam4:eggse"))
+	got, err := bencode.DecodeBytes([]byte("d3:cow3:moo4:spam4:eggse"))
 	if err != nil {
 		t.Fatalf("DecodeBytes() error = %v", err)
 	}
@@ -76,19 +78,19 @@ func TestDecodeDictKeysAreStrings(t *testing.T) {
 
 func TestEncodeDecodedValue(t *testing.T) {
 	in := []byte("d3:cow3:moo4:spaml1:a1:bee")
-	decoded, err := DecodeBytes(in)
+	decoded, err := bencode.DecodeBytes(in)
 	if err != nil {
 		t.Fatalf("DecodeBytes() error = %v", err)
 	}
 
-	if got := Encode(decoded); !bytes.Equal(got, in) {
+	if got := bencode.Encode(decoded); !bytes.Equal(got, in) {
 		t.Fatalf("Encode(DecodeBytes()) = %q, want %q", got, in)
 	}
 }
 
 func TestDecodeWithRawTracksDictionaryValueOffsets(t *testing.T) {
 	in := []byte("d4:infod3:cow3:mooee")
-	node, err := DecodeWithRaw(in)
+	node, err := bencode.DecodeWithRaw(in)
 	if err != nil {
 		t.Fatalf("DecodeWithRaw() error = %v", err)
 	}
@@ -120,7 +122,7 @@ func TestDecodeRejectsMalformedValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(string(tt), func(t *testing.T) {
-			if _, err := DecodeBytes(tt); err == nil {
+			if _, err := bencode.DecodeBytes(tt); err == nil {
 				t.Fatalf("DecodeBytes(%q) succeeded, want error", tt)
 			}
 		})

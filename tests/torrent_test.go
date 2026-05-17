@@ -1,4 +1,4 @@
-package torrent
+package tests
 
 import (
 	"bytes"
@@ -8,10 +8,11 @@ import (
 	"testing"
 
 	"github.com/SiddharthPalod/SidTorrent/internal/bencode"
+	"github.com/SiddharthPalod/SidTorrent/internal/torrent"
 )
 
 func TestOpenUbuntuTorrent(t *testing.T) {
-	tf, err := Open(filepath.Join("..", "..", "testdata", "ubuntu.torrent"))
+	tf, err := torrent.Open(filepath.Join("..", "testdata", "ubuntu.torrent"))
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
@@ -49,7 +50,7 @@ func TestOpenUbuntuTorrent(t *testing.T) {
 }
 
 func TestOpenUsesOriginalRawInfoForHash(t *testing.T) {
-	path := filepath.Join("..", "..", "testdata", "ubuntu.torrent")
+	path := filepath.Join("..", "testdata", "ubuntu.torrent")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("ReadFile() error = %v", err)
@@ -62,12 +63,45 @@ func TestOpenUsesOriginalRawInfoForHash(t *testing.T) {
 	infoNode := rootNode.Dict["info"]
 	wantRaw := data[infoNode.Start:infoNode.End]
 
-	tf, err := Open(path)
+	tf, err := torrent.Open(path)
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
 
 	if !bytes.Equal(tf.RawInfo, wantRaw) {
 		t.Fatal("RawInfo does not match original info dictionary bytes")
+	}
+}
+
+func TestPieceLengthAtHandlesLastPiece(t *testing.T) {
+	tests := []struct {
+		name          string
+		totalLength   int64
+		pieceLength   int64
+		pieceIndex    int
+		wantPieceSize int64
+	}{
+		{name: "full first piece", totalLength: 10, pieceLength: 4, pieceIndex: 0, wantPieceSize: 4},
+		{name: "full middle piece", totalLength: 10, pieceLength: 4, pieceIndex: 1, wantPieceSize: 4},
+		{name: "short last piece", totalLength: 10, pieceLength: 4, pieceIndex: 2, wantPieceSize: 2},
+		{name: "exact final piece", totalLength: 8, pieceLength: 4, pieceIndex: 1, wantPieceSize: 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := torrent.PieceLengthAt(tt.totalLength, tt.pieceLength, tt.pieceIndex)
+			if err != nil {
+				t.Fatalf("PieceLengthAt() error = %v", err)
+			}
+			if got != tt.wantPieceSize {
+				t.Fatalf("PieceLengthAt() = %d, want %d", got, tt.wantPieceSize)
+			}
+		})
+	}
+}
+
+func TestPieceLengthAtRejectsOutOfRangePiece(t *testing.T) {
+	if _, err := torrent.PieceLengthAt(10, 4, 3); err == nil {
+		t.Fatal("PieceLengthAt() succeeded for out-of-range piece, want error")
 	}
 }

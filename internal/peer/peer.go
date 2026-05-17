@@ -13,9 +13,23 @@ type Client struct {
 }
 
 func Connect(address string, infoHash [20]byte) (*Client, error) {
-	conn, err := net.DialTimeout("tcp", address, 10*time.Second)
+	return ConnectTimeout(address, infoHash, 10*time.Second)
+}
+
+func ConnectTimeout(address string, infoHash [20]byte, timeout time.Duration) (*Client, error) {
+	conn, err := net.DialTimeout("tcp", address, timeout)
 	if err != nil {
 		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			_ = conn.Close()
+		}
+	}()
+	if timeout > 0 {
+		if err = conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+			return nil, err
+		}
 	}
 
 	var peerID [20]byte
@@ -38,6 +52,11 @@ func Connect(address string, infoHash [20]byte) (*Client, error) {
 	}
 	if !VerifyHandshake(hs, recvHs) {
 		return nil, fmt.Errorf("handshake verify fail")
+	}
+	if timeout > 0 {
+		if err = conn.SetDeadline(time.Time{}); err != nil {
+			return nil, err
+		}
 	}
 
 	return &Client{
