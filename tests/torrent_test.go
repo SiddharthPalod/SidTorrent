@@ -20,6 +20,21 @@ func TestOpenUbuntuTorrent(t *testing.T) {
 	if tf.Announce != "https://torrent.ubuntu.com/announce" {
 		t.Fatalf("Announce = %q, want Ubuntu tracker", tf.Announce)
 	}
+	if len(tf.Trackers) != 2 {
+		t.Fatalf("len(Trackers) = %d, want 2", len(tf.Trackers))
+	}
+	if len(tf.Trackers[0]) != 1 {
+		t.Fatalf("len(Trackers[0]) = %d, want 1", len(tf.Trackers[0]))
+	}
+	if got, want := tf.Trackers[0][0], "https://torrent.ubuntu.com/announce"; got != want {
+		t.Fatalf("Trackers[0][0] = %q, want %q", got, want)
+	}
+	if len(tf.Trackers[1]) != 1 {
+		t.Fatalf("len(Trackers[1]) = %d, want 1", len(tf.Trackers[1]))
+	}
+	if got, want := tf.Trackers[1][0], "https://ipv6.torrent.ubuntu.com/announce"; got != want {
+		t.Fatalf("Trackers[1][0] = %q, want %q", got, want)
+	}
 	if tf.Name != "ubuntu-26.04-desktop-amd64.iso" {
 		t.Fatalf("Name = %q, want ubuntu-26.04-desktop-amd64.iso", tf.Name)
 	}

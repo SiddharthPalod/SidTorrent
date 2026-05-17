@@ -2,6 +2,26 @@ package torrent
 
 import "fmt"
 
+func (t *TorrentFile) PieceCount() int {
+	count := t.Length / t.PieceLength
+	if t.Length%t.PieceLength != 0 {
+		count++
+	}
+	return int(count)
+}
+
+func (t *TorrentFile) PieceLengthAt(index int) int64 {
+	length, err := PieceLengthAt(
+		t.Length,
+		t.PieceLength,
+		index,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return length
+}
+
 func PieceLengthAt(totalLength, standardPieceLength int64, pieceIndex int) (int64, error) {
 	if totalLength <= 0 {
 		return 0, fmt.Errorf("invalid total length: %d", totalLength)

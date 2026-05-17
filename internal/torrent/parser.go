@@ -11,6 +11,7 @@ import (
 
 type TorrentFile struct {
 	Announce    string
+	Trackers    [][]string
 	Name        string
 	Length      int64
 	PieceLength int64
@@ -91,9 +92,11 @@ func Open(path string) (*TorrentFile, error) {
 	if !ok {
 		return nil, errors.New("missing announce url")
 	}
+	trackers := collectTrackerTiers(announce, root["announce-list"])
 
 	tf := &TorrentFile{
 		Announce:    announce,
+		Trackers:    trackers,
 		Name:        name,
 		Length:      totalLength,
 		PieceLength: pieceLen,
@@ -103,6 +106,46 @@ func Open(path string) (*TorrentFile, error) {
 	}
 
 	return tf, nil
+}
+
+func collectTrackerTiers(primary string, announceList interface{}) [][]string {
+	seen := make(map[string]bool)
+	var tiers [][]string
+	addTier := func(rawTrackers []string) {
+		var tier []string
+		for _, raw := range rawTrackers {
+			if raw == "" || seen[raw] {
+				continue
+			}
+			seen[raw] = true
+			tier = append(tier, raw)
+		}
+		if len(tier) > 0 {
+			tiers = append(tiers, tier)
+		}
+	}
+
+	addTier([]string{primary})
+
+	rawTiers, ok := announceList.([]interface{})
+	if !ok {
+		return tiers
+	}
+	for _, rawTier := range rawTiers {
+		rawTrackers, ok := rawTier.([]interface{})
+		if !ok {
+			continue
+		}
+		var tier []string
+		for _, tracker := range rawTrackers {
+			if trackerURL, ok := asString(tracker); ok {
+				tier = append(tier, trackerURL)
+			}
+		}
+		addTier(tier)
+	}
+
+	return tiers
 }
 
 func asString(v interface{}) (string, bool) {

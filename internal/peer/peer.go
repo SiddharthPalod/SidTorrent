@@ -75,3 +75,64 @@ func (c *Client) SendInterested() error {
 	_, err := c.Conn.Write(msg.Serialize())
 	return err
 }
+
+func (c *Client) ReadBitField(totalPieces int) error {
+	msg, err := ReadMessage(c.Conn)
+	if err != nil {
+		return err
+	}
+	if msg == nil {
+		return fmt.Errorf("received keepalive instead of bitfield")
+	}
+	if msg.ID != MsgBitfield {
+		return fmt.Errorf(
+			"expected bitfield message got=%d",
+			msg.ID,
+		)
+	}
+
+	bitfield, err := ParseBitField(msg.Payload, totalPieces)
+	if err != nil {
+		return err
+	}
+	c.State.Bitfield = bitfield
+	return nil
+}
+
+func (c *Client) HandleHave(msg *Message) error {
+
+	pieceIndex, err := ParseHave(msg.Payload)
+	if err != nil {
+		return err
+	}
+
+	if pieceIndex < 0 ||
+		pieceIndex >= len(c.State.Bitfield) {
+
+		return fmt.Errorf(
+			"invalid piece index: %d",
+			pieceIndex,
+		)
+	}
+	fmt.Println("peer announced piece:", pieceIndex)
+	c.State.Bitfield[pieceIndex] = true
+
+	return nil
+}
+
+func (c *Client) ReadNextMessage() error {
+	msg, err := ReadMessage(c.Conn)
+	if err != nil {
+		return err
+	}
+	if msg == nil {
+		return nil
+	}
+
+	switch msg.ID {
+	case MsgHave:
+		return c.HandleHave(msg)
+	}
+
+	return nil
+}
