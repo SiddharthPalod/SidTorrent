@@ -34,7 +34,7 @@ func TestDownloadPieceSendsInterestedBeforeRequestWhenChoked(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	client := &peer.Client{Conn: clientConn, Choked: true}
+	client := &peer.Client{Conn: clientConn, State: peer.PeerState{Choked: true}}
 	wantBlock := []byte("hello")
 	errc := make(chan error, 1)
 
@@ -83,7 +83,7 @@ func TestDownloadPieceSendsInterestedBeforeRequestWhenChoked(t *testing.T) {
 
 func TestDownloadPieceReturnsEOFWhenPeerDisconnects(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
-	client := &peer.Client{Conn: clientConn, Choked: false}
+	client := &peer.Client{Conn: clientConn, State: peer.PeerState{Choked: false}}
 
 	go func() {
 		_, _ = peer.ReadMessage(serverConn)
@@ -102,7 +102,7 @@ func TestDownloadPieceRejectsIncorrectBlockOffset(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	client := &peer.Client{Conn: clientConn, Choked: false}
+	client := &peer.Client{Conn: clientConn, State: peer.PeerState{Choked: false}}
 	go func() {
 		_, _ = peer.ReadMessage(serverConn)
 		piecePayload := make([]byte, 9)
@@ -123,7 +123,7 @@ func TestDownloadPieceReturnsTimeoutIfChokedForever(t *testing.T) {
 	defer clientConn.Close()
 	defer serverConn.Close()
 
-	client := &peer.Client{Conn: clientConn, Choked: true}
+	client := &peer.Client{Conn: clientConn, State: peer.PeerState{Choked: true}}
 	_ = clientConn.SetDeadline(time.Now().Add(20 * time.Millisecond))
 
 	go func() {

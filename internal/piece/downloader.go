@@ -13,7 +13,7 @@ const BlockSize = 16384
 var ErrInvalidPieceBlock = errors.New("invalid piece block")
 
 func DownloadPiece(client *peer.Client, pieceIndex int, pieceLength int) ([]byte, error) {
-	if client.Choked {
+	if client.State.Choked {
 		if err := client.SendInterested(); err != nil {
 			return nil, err
 		}
@@ -64,7 +64,7 @@ func DownloadPiece(client *peer.Client, pieceIndex int, pieceLength int) ([]byte
 }
 
 func waitForUnchoke(client *peer.Client) error {
-	for client.Choked {
+	for client.State.Choked {
 		msg, err := peer.ReadMessage(client.Conn)
 		if err != nil {
 			return err
@@ -74,9 +74,9 @@ func waitForUnchoke(client *peer.Client) error {
 		}
 		switch msg.ID {
 		case peer.MsgUnchoke:
-			client.Choked = false
+			client.State.Choked = false
 		case peer.MsgChoke:
-			client.Choked = true
+			client.State.Choked = true
 		}
 	}
 	return nil
