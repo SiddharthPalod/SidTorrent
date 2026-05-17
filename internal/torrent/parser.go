@@ -83,17 +83,17 @@ func Open(path string) (*TorrentFile, error) {
 		return nil, errors.New("could not determine torrent size")
 	}
 
-	name, ok := info["name"].(string)
+	name, ok := asString(info["name"])
 	if !ok {
 		return nil, errors.New("missing torrent name")
 	}
 
-	pieceLen, ok := info["piece length"].(int)
+	pieceLen, ok := asInt(info["piece length"])
 	if !ok {
 		return nil, errors.New("missing piece length")
 	}
 
-	pieces, ok := info["pieces"].(string)
+	pieces, ok := asBytes(info["pieces"])
 	if !ok {
 		return nil, errors.New("missing pieces")
 	}
@@ -103,14 +103,64 @@ func Open(path string) (*TorrentFile, error) {
 	infoBytes := bencode.Encode(info)
 	hash := sha1.Sum(infoBytes)
 
+	announce, ok := asString(root["announce"])
+	if !ok {
+		return nil, errors.New("missing announce url")
+	}
+
 	tf := &TorrentFile{
-		Announce: root["announce"].(string),
+		Announce: announce,
 		Name:     name,
 		Length:   totalLength,
 		PieceLen: pieceLen,
-		Pieces:   []byte(pieces),
+		Pieces:   pieces,
 		InfoHash: hash,
 	}
 
 	return tf, nil
+}
+
+func asString(v interface{}) (string, bool) {
+
+	switch val := v.(type) {
+
+	case string:
+		return val, true
+
+	case []byte:
+		return string(val), true
+
+	default:
+		return "", false
+	}
+}
+
+func asBytes(v interface{}) ([]byte, bool) {
+
+	switch val := v.(type) {
+
+	case []byte:
+		return val, true
+
+	case string:
+		return []byte(val), true
+
+	default:
+		return nil, false
+	}
+}
+
+func asInt(v interface{}) (int, bool) {
+
+	switch val := v.(type) {
+
+	case int:
+		return val, true
+
+	case int64:
+		return int(val), true
+
+	default:
+		return 0, false
+	}
 }
