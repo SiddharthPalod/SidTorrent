@@ -8,8 +8,8 @@ import (
 )
 
 type Client struct {
-	Conn   net.Conn
-	Choked bool
+	Conn  net.Conn
+	State PeerState
 }
 
 func Connect(address string, infoHash [20]byte) (*Client, error) {
@@ -60,8 +60,11 @@ func ConnectTimeout(address string, infoHash [20]byte, timeout time.Duration) (*
 	}
 
 	return &Client{
-		Conn:   conn,
-		Choked: true,
+		Conn: conn,
+		State: PeerState{
+			Choked:     true,
+			LastActive: time.Now(),
+		},
 	}, nil
 }
 
