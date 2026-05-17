@@ -45,7 +45,7 @@ func main() {
 	}
 	fmt.Println("sent interested message")
 
-	data, err := piece.DownloadPiece(client, 0, tf.PieceLen)
+	data, err := piece.DownloadPiece(client, 0, int(tf.PieceLength))
 	if err != nil {
 		panic(err)
 	}

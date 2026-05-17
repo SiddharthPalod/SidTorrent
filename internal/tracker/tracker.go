@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/SiddharthPalod/SidTorrent/internal/bencode"
 	"github.com/SiddharthPalod/SidTorrent/internal/torrent"
 )
 
@@ -19,7 +20,9 @@ type Peer struct {
 }
 
 func GetPeers(tf *torrent.TorrentFile) ([]Peer, error) {
+
 	peerID := randomPeerID()
+
 	base, err := url.Parse(tf.Announce)
 	if err != nil {
 		return nil, err
@@ -31,33 +34,63 @@ func GetPeers(tf *torrent.TorrentFile) ([]Peer, error) {
 		"port":       []string{"6881"},
 		"uploaded":   []string{"0"},
 		"downloaded": []string{"0"},
-		"left":       []string{strconv.Itoa(tf.Length)},
+		"left":       []string{strconv.FormatInt(tf.Length, 10)},
 		"compact":    []string{"1"},
 	}
 
 	base.RawQuery = params.Encode()
+
+	fmt.Println("tracker url:")
+	fmt.Println(base.String())
+
 	resp, err := http.Get(base.String())
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	return parseCompactPeers(body), nil
+
+	decoded, err := bencode.DecodeBytes(body)
+	if err != nil {
+		return nil, err
+	}
+
+	root := decoded.(map[string]interface{})
+
+	peerBytes, ok := root["peers"].([]byte)
+	if !ok {
+		return nil, fmt.Errorf("tracker response missing peers")
+	}
+
+	return parseCompactPeers(peerBytes), nil
 }
 
-func parseCompactPeers(body []byte) []Peer {
+func parseCompactPeers(data []byte) []Peer {
+
 	var peers []Peer
-	for i := 0; i+6 <= len(body); i += 6 {
-		ip := net.IP(body[i : i+6])
-		port := binary.BigEndian.Uint16(body[i+4 : i+6])
+
+	for i := 0; i+6 <= len(data); i += 6 {
+
+		ip := net.IP(data[i : i+4])
+
+		port := binary.BigEndian.Uint16(data[i+4 : i+6])
+
+		fmt.Printf(
+			"peer => %s:%d\n",
+			ip.String(),
+			port,
+		)
+
 		peers = append(peers, Peer{
 			IP:   ip,
 			Port: port,
 		})
 	}
+
 	return peers
 }
 

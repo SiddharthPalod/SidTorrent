@@ -1,42 +1,43 @@
 package torrent
 
 import (
-	"bufio"
 	"crypto/sha1"
 	"errors"
-	"fmt"
 	"os"
+	"strconv"
 
 	"github.com/SiddharthPalod/SidTorrent/internal/bencode"
 )
 
 type TorrentFile struct {
-	Announce string
-	Name     string
-	Length   int
-	PieceLen int
-	Pieces   []byte
-	InfoHash [20]byte
+	Announce    string
+	Name        string
+	Length      int64
+	PieceLength int64
+	Pieces      []byte
+	InfoHash    [20]byte
+	RawInfo     []byte
 }
 
 func Open(path string) (*TorrentFile, error) {
-
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-
-	reader := bufio.NewReader(file)
-
-	decoded, err := bencode.Decode(reader)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	root, ok := decoded.(map[string]interface{})
+	rootNode, err := bencode.DecodeWithRaw(data)
+	if err != nil {
+		return nil, err
+	}
+
+	root, ok := rootNode.Value.(map[string]interface{})
 	if !ok {
 		return nil, errors.New("invalid torrent root")
+	}
+
+	infoNode, ok := rootNode.Dict["info"]
+	if !ok {
+		return nil, errors.New("missing info dictionary")
 	}
 
 	info, ok := root["info"].(map[string]interface{})
@@ -44,25 +45,10 @@ func Open(path string) (*TorrentFile, error) {
 		return nil, errors.New("missing info dictionary")
 	}
 
-	// DEBUG
-	fmt.Println("INFO DICT:")
-	for k, v := range info {
-		switch val := v.(type) {
-		case string:
-			if k == "pieces" {
-				fmt.Printf("%s => binary data (%d bytes)\n", k, len(val))
-			} else {
-				fmt.Printf("%s => %s\n", k, val)
-			}
-		default:
-			fmt.Printf("%s => %T => %v\n", k, v, v)
-		}
-	}
-
-	var totalLength int
+	var totalLength int64
 
 	// SINGLE FILE
-	if length, ok := info["length"].(int); ok {
+	if length, ok := asInt(info["length"]); ok {
 		totalLength = length
 	}
 
@@ -73,7 +59,7 @@ func Open(path string) (*TorrentFile, error) {
 
 			fileMap := f.(map[string]interface{})
 
-			if l, ok := fileMap["length"].(int); ok {
+			if l, ok := asInt(fileMap["length"]); ok {
 				totalLength += l
 			}
 		}
@@ -98,10 +84,8 @@ func Open(path string) (*TorrentFile, error) {
 		return nil, errors.New("missing pieces")
 	}
 
-	// TEMPORARY HASH
-	// Later we’ll properly bencode info dict before hashing
-	infoBytes := bencode.Encode(info)
-	hash := sha1.Sum(infoBytes)
+	rawInfo := append([]byte(nil), data[infoNode.Start:infoNode.End]...)
+	hash := sha1.Sum(rawInfo)
 
 	announce, ok := asString(root["announce"])
 	if !ok {
@@ -109,12 +93,13 @@ func Open(path string) (*TorrentFile, error) {
 	}
 
 	tf := &TorrentFile{
-		Announce: announce,
-		Name:     name,
-		Length:   totalLength,
-		PieceLen: pieceLen,
-		Pieces:   pieces,
-		InfoHash: hash,
+		Announce:    announce,
+		Name:        name,
+		Length:      totalLength,
+		PieceLength: pieceLen,
+		Pieces:      pieces,
+		InfoHash:    hash,
+		RawInfo:     rawInfo,
 	}
 
 	return tf, nil
@@ -150,15 +135,19 @@ func asBytes(v interface{}) ([]byte, bool) {
 	}
 }
 
-func asInt(v interface{}) (int, bool) {
+func asInt(v interface{}) (int64, bool) {
 
 	switch val := v.(type) {
 
 	case int:
-		return val, true
+		return int64(val), true
 
 	case int64:
-		return int(val), true
+		return val, true
+
+	case string:
+		i, err := strconv.ParseInt(val, 10, 64)
+		return i, err == nil
 
 	default:
 		return 0, false
