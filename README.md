@@ -7,7 +7,8 @@ Phase 1 is intentionally narrow: parse a `.torrent`, announce to an HTTP tracker
 ## Run
 
 ```powershell
-go run ./cmd/siddtorrent -torrent path\to\file.torrent
+go run ./cmd/siddtorrent path\to\file.torrent
+go run ./cmd/siddtorrent -out downloads\ubuntu.iso path\to\file.torrent
 ```
 
 ## Current Packages

@@ -301,8 +301,3 @@ But if you complete even **Phase 5**, you’re already ahead of 99% of candidate
 * Demo streaming feature
 
 ---
-
-If you want, I can:
-
-* break Phase 1 into **exact file structure + code skeleton (Go/C++)**
-* or design your **streaming algorithm in detail (buffer + scheduling logic)**
