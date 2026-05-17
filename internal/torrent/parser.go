@@ -47,7 +47,16 @@ func Open(path string) (*TorrentFile, error) {
 	// DEBUG
 	fmt.Println("INFO DICT:")
 	for k, v := range info {
-		fmt.Printf("%s => %T => %v\n", k, v, v)
+		switch val := v.(type) {
+		case string:
+			if k == "pieces" {
+				fmt.Printf("%s => binary data (%d bytes)\n", k, len(val))
+			} else {
+				fmt.Printf("%s => %s\n", k, val)
+			}
+		default:
+			fmt.Printf("%s => %T => %v\n", k, v, v)
+		}
 	}
 
 	var totalLength int
@@ -91,7 +100,7 @@ func Open(path string) (*TorrentFile, error) {
 
 	// TEMPORARY HASH
 	// Later we’ll properly bencode info dict before hashing
-	infoBytes := []byte(fmt.Sprintf("%v", info))
+	infoBytes := bencode.Encode(info)
 	hash := sha1.Sum(infoBytes)
 
 	tf := &TorrentFile{
