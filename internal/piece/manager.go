@@ -23,8 +23,8 @@ type PieceManager struct {
 	FailedAttempts map[int]int
 	MaxRetries     int
 	Downloaded     int64
-
-	mu sync.Mutex
+	Assemblers     map[int]*PieceAssembler
+	mu             sync.Mutex
 }
 
 func NewPieceManager(tf *torrent.TorrentFile) *PieceManager {
@@ -38,12 +38,23 @@ func NewPieceManager(tf *torrent.TorrentFile) *PieceManager {
 		Completed:      make(map[int]bool),
 		FailedAttempts: make(map[int]int),
 		MaxRetries:     DefaultMaxRetries,
+		Assemblers:     make(map[int]*PieceAssembler),
 	}
 
 	for i := 0; i < totalPieces; i++ {
+		size := tf.PieceLengthAt(i)
+		pm.Assemblers[i] = NewPieceAssembler(i, int(size))
 		pm.Pending[i] = true
 	}
 	return pm
+}
+
+func (pm *PieceManager) NextBlock(pieceIndex int) (offset int, length int, ok bool) {
+	assembler, exists := pm.Assemblers[pieceIndex]
+	if !exists {
+		return 0, 0, false
+	}
+	return assembler.NextMissingBlock()
 }
 
 func (pm *PieceManager) NextPiece(

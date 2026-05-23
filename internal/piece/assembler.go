@@ -1,6 +1,9 @@
 package piece
 
-import "fmt"
+import (
+	"fmt"
+	"sync"
+)
 
 const BlockSize = 16384
 
@@ -9,7 +12,9 @@ type PieceAssembler struct {
 	PieceSize   int
 	Data        []byte
 	Received    []bool
+	Requested   []bool
 	TotalBlocks int
+	mu          sync.Mutex
 }
 
 func NewPieceAssembler(pieceIndex int, pieceSize int) *PieceAssembler {
@@ -35,6 +40,7 @@ func (pa *PieceAssembler) BlockLength(blockIndex int) int {
 }
 
 func (pa *PieceAssembler) AddBlock(offset int, block []byte) error {
+
 	if offset < 0 || offset >= pa.PieceSize {
 		return fmt.Errorf("Offset out of bounds: %d", offset)
 	}
@@ -61,4 +67,35 @@ func (pa *PieceAssembler) IsComplete() bool {
 		}
 	}
 	return true
+}
+
+func (pa *PieceAssembler) NextMissingBlock() (offset int, length int, ok bool) {
+	pa.mu.Lock()
+	defer pa.mu.Unlock()
+	for i := 0; i < pa.TotalBlocks; i++ {
+		if pa.Received[i] {
+			continue
+		}
+		if pa.Requested[i] {
+			continue
+		}
+		pa.Requested[i] = true
+		offset = i * BlockSize
+		length = pa.BlockLength(i)
+		return offset, length, true
+	}
+
+	return 0, 0, false
+}
+
+func (pa *PieceAssembler) ResetBlock(offset int) {
+	pa.mu.Lock()
+	defer pa.mu.Unlock()
+
+	index := offset / BlockSize
+
+	if index >= len(pa.Requested) {
+		return
+	}
+	pa.Requested[index] = false
 }
