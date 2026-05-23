@@ -15,6 +15,7 @@ import (
 	"github.com/SiddharthPalod/SidTorrent/internal/storage"
 	"github.com/SiddharthPalod/SidTorrent/internal/torrent"
 	"github.com/SiddharthPalod/SidTorrent/internal/tracker"
+	"github.com/SiddharthPalod/SidTorrent/internal/util"
 )
 
 func main() {
@@ -27,6 +28,9 @@ func main() {
 func run() error {
 	var outputPath string
 	flag.StringVar(&outputPath, "out", "", "output file path")
+	var maxDownloadKB int64
+	flag.Int64Var(&maxDownloadKB, "max-download", 0, "maximum download rate in KB/s (0 for unlimited)")
+
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "usage: siddtorrent [-out output-file] <torrent-file>\n")
 		flag.PrintDefaults()
@@ -198,8 +202,14 @@ func run() error {
 	}
 	fmt.Printf("[STAGE] Main: Confirmed at least ONE successful peer connection! (Total: %d)\n", len(clients))
 
+	var rl *util.RateLimiter
+	if maxDownloadKB > 0 {
+		rl = util.NewRateLimiter(maxDownloadKB * 1024)
+		fmt.Printf("[STAGE] Main: Enabled download speed cap at %d KB/s\n", maxDownloadKB)
+	}
+
 	// START DOWNLOAD LOOP
-	if err := piece.DownloadLoop(tf, pm, writer, clients); err != nil {
+	if err := piece.DownloadLoop(tf, pm, writer, clients, rl); err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
 

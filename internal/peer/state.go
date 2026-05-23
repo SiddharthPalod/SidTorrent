@@ -14,6 +14,11 @@ type PeerState struct {
 	Downloaded int64
 	Uploaded   int64
 
+	ChokedByUs     bool
+	InterestedInUs bool
+	IntervalBytes  int64
+	DownloadRate   float64
+
 	// lifecycle
 	LastActive time.Time
 }

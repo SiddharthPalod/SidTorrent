@@ -1,6 +1,7 @@
 package peer
 
 import (
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
@@ -93,9 +94,21 @@ func ConnectTimeout(address string, infoHash [20]byte, timeout time.Duration) (*
 }
 
 func (c *Client) SendInterested() error {
-	msg := &Message{
-		ID: MsgInterested,
-	}
+	msg := &Message{ID: MsgInterested}
+	_, err := c.Conn.Write(msg.Serialize())
+	return err
+}
+
+func (c *Client) SendNotInterested() error {
+	msg := &Message{ID: MsgNotInterested}
+	_, err := c.Conn.Write(msg.Serialize())
+	return err
+}
+
+func (c *Client) SendHave(pieceIndex int) error {
+	payload := make([]byte, 4)
+	binary.BigEndian.PutUint32(payload, uint32(pieceIndex))
+	msg := &Message{ID: MsgHave, Payload: payload}
 	_, err := c.Conn.Write(msg.Serialize())
 	return err
 }
@@ -162,4 +175,16 @@ func (c *Client) ReadNextMessage() error {
 	}
 
 	return nil
+}
+
+func (c *Client) SendChoke() error {
+	msg := &Message{ID: MsgChoke}
+	_, err := c.Conn.Write(msg.Serialize())
+	return err
+}
+
+func (c *Client) SendUnchoke() error {
+	msg := &Message{ID: MsgUnchoke}
+	_, err := c.Conn.Write(msg.Serialize())
+	return err
 }

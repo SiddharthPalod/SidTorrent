@@ -9,6 +9,7 @@ import (
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
 	"github.com/SiddharthPalod/SidTorrent/internal/storage"
 	"github.com/SiddharthPalod/SidTorrent/internal/torrent"
+	"github.com/SiddharthPalod/SidTorrent/internal/util"
 )
 
 func StartWorker(
@@ -16,9 +17,11 @@ func StartWorker(
 	tf *torrent.TorrentFile,
 	pm *PieceManager,
 	writer *storage.Writer,
+	rl *util.RateLimiter,
 ) error {
 	defer client.Conn.Close()
-
+	pm.RegisterPeerBitfield(client.State.Bitfield)
+	defer pm.UnregisterPeerBitfield(client.State.Bitfield)
 	fmt.Printf("[STAGE] StartWorker: starting worker goroutine for peer %s\n", client.Conn.RemoteAddr())
 
 	for {
@@ -32,7 +35,7 @@ func StartWorker(
 		fmt.Printf("[STAGE] StartWorker: worker assigned piece %d (len %d bytes) from peer %s\n",
 			pieceIndex, pieceLength, client.Conn.RemoteAddr())
 
-		data, err := DownloadPiece(client, pieceIndex, pieceLength)
+		data, err := DownloadPiece(client, pieceIndex, pieceLength, rl)
 		if err != nil {
 			fmt.Printf(
 				"[STAGE] StartWorker: piece %d failed download from peer %s: %v\n",

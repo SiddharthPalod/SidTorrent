@@ -187,11 +187,11 @@ func TestDownloadPieceSendsInterestedBeforeRequestWhenChoked(
 
 		errc <- err
 	}()
-
 	got, err := piece.DownloadPiece(
 		client,
 		0,
 		len(wantBlock),
+		nil,
 	)
 
 	if err != nil {
@@ -247,6 +247,7 @@ func TestDownloadPieceReturnsEOFWhenPeerDisconnects(
 		client,
 		0,
 		1,
+		nil,
 	)
 
 	if !errors.Is(err, io.ErrClosedPipe) &&
@@ -311,6 +312,7 @@ func TestDownloadPieceRejectsIncorrectBlockOffset(
 		client,
 		0,
 		1,
+		nil,
 	)
 
 	if !errors.Is(
@@ -359,6 +361,7 @@ func TestDownloadPieceReturnsTimeoutIfChokedForever(
 		client,
 		0,
 		1,
+		nil,
 	)
 
 	if netErr, ok := err.(net.Error); !ok ||

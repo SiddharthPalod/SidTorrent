@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
+	"github.com/SiddharthPalod/SidTorrent/internal/util"
 )
 
 var ErrInvalidPieceBlock = errors.New("invalid piece block")
@@ -15,6 +16,7 @@ func DownloadPiece(
 	client *peer.Client,
 	pieceIndex int,
 	pieceLength int,
+	rl *util.RateLimiter,
 ) ([]byte, error) {
 
 	// wait until peer unchokes us
@@ -44,6 +46,10 @@ func DownloadPiece(
 		length := assembler.BlockLength(
 			blockIndex,
 		)
+
+		if rl != nil {
+			rl.Wait(int64(length))
+		}
 
 		req := RequestMessage(
 			pieceIndex,
@@ -132,6 +138,9 @@ func DownloadPiece(
 				if err != nil {
 					return nil, err
 				}
+
+				client.State.IntervalBytes += int64(len(block))
+				client.State.LastActive = time.Now()
 
 				if blockIndex == 0 && receivedOffset == 0 {
 					fmt.Printf("[STAGE] peer.Connect: first block received from peer %s (piece %d, offset %d, size %d)\n",
