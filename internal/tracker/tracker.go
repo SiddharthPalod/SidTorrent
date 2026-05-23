@@ -169,7 +169,7 @@ func getHTTPPeers(base *url.URL, tf *torrent.TorrentFile, peerID string) ([]Peer
 		return nil, fmt.Errorf("tracker response missing peers")
 	}
 
-	peers := parseCompactPeers(peerBytes)
+	peers := parseCompactPeers(peerBytes, false)
 
 	fmt.Println("tracker returned peers:", len(peers))
 
@@ -340,26 +340,43 @@ func udpAnnounce(conn net.Conn, connectionID int64, tf *torrent.TorrentFile, pee
 		return nil, fmt.Errorf("short udp announce response")
 	}
 
-	peers := parseCompactPeers(resp[20:n])
+	isIPv6 := false
+	if udpAddr, ok := conn.RemoteAddr().(*net.UDPAddr); ok {
+		isIPv6 = udpAddr.IP.To4() == nil
+	}
+	peers := parseCompactPeers(resp[20:n], isIPv6)
 	fmt.Println("tracker returned peers:", len(peers))
 	return peers, nil
 }
 
-func parseCompactPeers(data []byte) []Peer {
+func parseCompactPeers(data []byte, isIPv6 bool) []Peer {
+	peerSize := 6
+	if isIPv6 {
+		peerSize = 18
+	}
 
-	if len(data)%6 != 0 {
-		fmt.Println("warning: malformed compact peer list")
+	if len(data)%peerSize != 0 {
+		fmt.Printf("warning: malformed compact peer list (length %d, expected multiple of %d)\n", len(data), peerSize)
 	}
 
 	var peers []Peer
 
-	for i := 0; i+6 <= len(data); i += 6 {
+	for i := 0; i+peerSize <= len(data); i += peerSize {
+		var ip net.IP
+		var port uint16
 
-		ip := net.IP(data[i : i+4])
+		if isIPv6 {
+			ip = net.IP(data[i : i+16])
+			port = binary.BigEndian.Uint16(data[i+16 : i+18])
+		} else {
+			ip = net.IP(data[i : i+4])
+			port = binary.BigEndian.Uint16(data[i+4 : i+6])
+		}
 
-		port := binary.BigEndian.Uint16(
-			data[i+4 : i+6],
-		)
+		// Skip invalid or private/unspecified multicast ranges
+		if ip.IsUnspecified() || ip.IsMulticast() {
+			continue
+		}
 
 		peers = append(peers, Peer{
 			IP:   ip,

@@ -156,7 +156,7 @@ func run() error {
 			}
 			mu.Unlock()
 
-			address := fmt.Sprintf("%s:%d", ip.String(), port)
+			address := net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port))
 			fmt.Printf("[STAGE] Main: Attempting to connect to peer %s...\n", address)
 
 			client, err := peer.ConnectTimeout(address, tf.InfoHash, 15*time.Second)
