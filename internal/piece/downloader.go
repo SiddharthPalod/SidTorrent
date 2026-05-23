@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
 )
@@ -18,7 +19,7 @@ func DownloadPiece(
 
 	// wait until peer unchokes us
 	if client.State.Choked {
-
+		fmt.Printf("[STAGE] DownloadPiece: waiting for unchoke from peer %s\n", client.Conn.RemoteAddr())
 		if err := client.SendInterested(); err != nil {
 			return nil, err
 		}
@@ -32,6 +33,9 @@ func DownloadPiece(
 		pieceIndex,
 		pieceLength,
 	)
+
+	fmt.Printf("[STAGE] DownloadPiece: starting download for piece %d (%d blocks, %d bytes) from peer %s\n",
+		pieceIndex, assembler.TotalBlocks, pieceLength, client.Conn.RemoteAddr())
 
 	for blockIndex := 0; blockIndex < assembler.TotalBlocks; blockIndex++ {
 
@@ -47,6 +51,9 @@ func DownloadPiece(
 			length,
 		)
 
+		fmt.Printf("[STAGE] DownloadPiece: requesting block %d/%d (offset %d, len %d) from peer %s\n",
+			blockIndex+1, assembler.TotalBlocks, offset, length, client.Conn.RemoteAddr())
+
 		_, err := client.Conn.Write(
 			req.Serialize(),
 		)
@@ -56,10 +63,11 @@ func DownloadPiece(
 		}
 
 		for {
-
+			_ = client.Conn.SetReadDeadline(time.Now().Add(45 * time.Second))
 			msg, err := peer.ReadMessage(
 				client.Conn,
 			)
+			_ = client.Conn.SetReadDeadline(time.Time{})
 
 			if err != nil {
 				return nil, err
@@ -82,6 +90,7 @@ func DownloadPiece(
 			case peer.MsgUnchoke:
 
 				client.State.Choked = false
+				fmt.Printf("[STAGE] peer.Connect: unchoked by peer %s\n", client.Conn.RemoteAddr())
 
 				continue
 
@@ -124,11 +133,17 @@ func DownloadPiece(
 					return nil, err
 				}
 
+				if blockIndex == 0 && receivedOffset == 0 {
+					fmt.Printf("[STAGE] peer.Connect: first block received from peer %s (piece %d, offset %d, size %d)\n",
+						client.Conn.RemoteAddr(), pieceIndex, receivedOffset, len(block))
+				}
+
 				fmt.Printf(
-					"received block %d/%d (%d bytes)\n",
+					"[STAGE] DownloadPiece: received block %d/%d (%d bytes) from peer %s\n",
 					blockIndex+1,
 					assembler.TotalBlocks,
 					len(block),
+					client.Conn.RemoteAddr(),
 				)
 
 				goto nextBlock
@@ -171,6 +186,7 @@ func waitForUnchoke(
 		case peer.MsgUnchoke:
 
 			client.State.Choked = false
+			fmt.Printf("[STAGE] peer.Connect: unchoked by peer %s\n", client.Conn.RemoteAddr())
 
 		case peer.MsgChoke:
 

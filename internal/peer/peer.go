@@ -26,6 +26,9 @@ func ConnectTimeout(address string, infoHash [20]byte, timeout time.Duration) (*
 			_ = conn.Close()
 		}
 	}()
+
+	fmt.Printf("[STAGE] peer.Connect: dial success to %s\n", address)
+
 	if timeout > 0 {
 		if err = conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 			return nil, err
@@ -35,16 +38,34 @@ func ConnectTimeout(address string, infoHash [20]byte, timeout time.Duration) (*
 	var peerID [20]byte
 	copy(peerID[:], []byte("-SD001-1234567890"))
 	hs := NewHandshake(infoHash, peerID)
+
+	fmt.Printf("[STAGE] peer.Connect: sending handshake to %s\n", address)
 	_, err = conn.Write(hs.Serialize())
 	if err != nil {
 		return nil, err
 	}
+	fmt.Printf("[STAGE] peer.Connect: handshake sent to %s\n", address)
 
-	resp := make([]byte, 68)
-	_, err = io.ReadFull(conn, resp)
+	// Read the first byte to determine protocol string length
+	pstrLenBuf := make([]byte, 1)
+	_, err = io.ReadFull(conn, pstrLenBuf)
 	if err != nil {
 		return nil, err
 	}
+	pstrlen := int(pstrLenBuf[0])
+
+	// Read the remaining handshake bytes (pstrlen + 48 bytes)
+	remainingLen := pstrlen + 48
+	remainingBuf := make([]byte, remainingLen)
+	_, err = io.ReadFull(conn, remainingBuf)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reassemble the complete handshake message
+	resp := make([]byte, 1+remainingLen)
+	resp[0] = pstrLenBuf[0]
+	copy(resp[1:], remainingBuf)
 
 	recvHs, err := ReadHandshake(resp)
 	if err != nil {
@@ -53,6 +74,9 @@ func ConnectTimeout(address string, infoHash [20]byte, timeout time.Duration) (*
 	if !VerifyHandshake(hs, recvHs) {
 		return nil, fmt.Errorf("handshake verify fail")
 	}
+
+	fmt.Printf("[STAGE] peer.Connect: handshake received from %s (Pstr: %q)\n", address, recvHs.Pstr)
+
 	if timeout > 0 {
 		if err = conn.SetDeadline(time.Time{}); err != nil {
 			return nil, err
@@ -96,6 +120,9 @@ func (c *Client) ReadBitField(totalPieces int) error {
 		return err
 	}
 	c.State.Bitfield = bitfield
+
+	fmt.Printf("[STAGE] peer.Connect: bitfield received from %s (%d pieces)\n", c.Conn.RemoteAddr(), len(bitfield))
+
 	return nil
 }
 

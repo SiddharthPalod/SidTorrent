@@ -370,3 +370,15 @@ func TestDownloadPieceReturnsTimeoutIfChokedForever(
 		)
 	}
 }
+
+func TestPieceAssemblerInitializesRequestedSlice(t *testing.T) {
+	assembler := piece.NewPieceAssembler(0, 32768) // 2 blocks
+	if len(assembler.Requested) != 2 {
+		t.Fatalf("expected Requested length of 2, got %d", len(assembler.Requested))
+	}
+
+	offset, length, ok := assembler.NextMissingBlock()
+	if !ok || offset != 0 || length != piece.BlockSize {
+		t.Fatalf("expected first missing block, got offset=%d, length=%d, ok=%t", offset, length, ok)
+	}
+}

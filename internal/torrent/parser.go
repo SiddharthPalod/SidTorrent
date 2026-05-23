@@ -88,11 +88,25 @@ func Open(path string) (*TorrentFile, error) {
 	rawInfo := append([]byte(nil), data[infoNode.Start:infoNode.End]...)
 	hash := sha1.Sum(rawInfo)
 
-	announce, ok := asString(root["announce"])
-	if !ok {
-		return nil, errors.New("missing announce url")
+	var announce string
+	if ann, ok := asString(root["announce"]); ok {
+		announce = ann
 	}
+
 	trackers := collectTrackerTiers(announce, root["announce-list"])
+	if len(trackers) == 0 {
+		// Fallback: Inject popular public trackers if the torrent is trackerless/webseed-only
+		trackers = [][]string{
+			{"udp://tracker.opentrackr.org:1337/announce"},
+			{"udp://open.demonii.com:1337/announce"},
+			{"udp://exodus.desync.com:6969/announce"},
+			{"http://tracker.opentrackr.org:1337/announce"},
+		}
+	}
+
+	if announce == "" && len(trackers) > 0 && len(trackers[0]) > 0 {
+		announce = trackers[0][0]
+	}
 
 	tf := &TorrentFile{
 		Announce:    announce,

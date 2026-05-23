@@ -4,8 +4,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
 	"github.com/SiddharthPalod/SidTorrent/internal/piece"
@@ -117,75 +120,83 @@ func run() error {
 	}
 	defer writer.Close()
 
-	// connect multiple peers
+	// connect multiple peers concurrently
 	var clients []*peer.Client
+	var mu sync.Mutex
 	totalPieces := tf.PieceCount()
 
-	for _, p := range peers {
-		address := fmt.Sprintf(
-			"%s:%d",
-			p.IP.String(),
-			p.Port,
-		)
-		fmt.Println(
-			"trying peer:",
-			address,
-		)
-		client, err := peer.Connect(
-			address,
-			tf.InfoHash,
-		)
-		if err != nil {
-			fmt.Println(
-				"connect failed:",
-				err,
-			)
-			continue
-		}
-		fmt.Println(
-			"connected:",
-			address,
-		)
-		err = client.ReadBitField(
-			totalPieces,
-		)
-		if err != nil {
-			fmt.Println(
-				"bitfield failed:",
-				err,
-			)
-			_ = client.Conn.Close()
-			continue
-		}
-		fmt.Println(
-			"received bitfield",
-		)
+	var wg sync.WaitGroup
+	// Limit maximum concurrent connection attempts to 20 to avoid descriptor exhaustion
+	sem := make(chan struct{}, 20)
 
-		err = client.SendInterested()
-		if err != nil {
-			fmt.Println(
-				"interested failed:",
-				err,
-			)
-			_ = client.Conn.Close()
-			continue
-		}
-		fmt.Println(
-			"sent interested",
-		)
-		clients = append(
-			clients,
-			client,
-		)
+	for _, p := range peers {
+		mu.Lock()
 		if len(clients) >= 10 {
+			mu.Unlock()
 			break
 		}
+		mu.Unlock()
+
+		wg.Add(1)
+		go func(ip net.IP, port uint16) {
+			defer wg.Done()
+
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			// Check again if we already have enough before dialing
+			mu.Lock()
+			if len(clients) >= 10 {
+				mu.Unlock()
+				return
+			}
+			mu.Unlock()
+
+			address := fmt.Sprintf("%s:%d", ip.String(), port)
+			fmt.Printf("[STAGE] Main: Attempting to connect to peer %s...\n", address)
+
+			client, err := peer.ConnectTimeout(address, tf.InfoHash, 15*time.Second)
+			if err != nil {
+				fmt.Printf("[STAGE] Main: Connection or handshake failed with peer %s: %v\n", address, err)
+				return
+			}
+			fmt.Printf("[STAGE] Main: Handshake successful with peer %s\n", address)
+
+			err = client.ReadBitField(totalPieces)
+			if err != nil {
+				fmt.Printf("[STAGE] Main: Bitfield read failed from peer %s: %v\n", address, err)
+				_ = client.Conn.Close()
+				return
+			}
+			fmt.Printf("[STAGE] Main: Bitfield successfully read from peer %s\n", address)
+
+			err = client.SendInterested()
+			if err != nil {
+				fmt.Printf("[STAGE] Main: Sending 'interested' failed to peer %s: %v\n", address, err)
+				_ = client.Conn.Close()
+				return
+			}
+			fmt.Printf("[STAGE] Main: Sent 'interested' message to peer %s\n", address)
+
+			mu.Lock()
+			if len(clients) < 10 {
+				clients = append(clients, client)
+				fmt.Printf("[STAGE] Main: Peer %s successfully added to pool! (Total active: %d)\n", address, len(clients))
+			} else {
+				// We already reached 10, close this one
+				_ = client.Conn.Close()
+			}
+			mu.Unlock()
+		}(p.IP, p.Port)
 	}
 
-	fmt.Println("usable peers:", len(clients))
+	wg.Wait()
+
+	fmt.Printf("[STAGE] Main: Connection phase complete. Total active usable peers: %d\n", len(clients))
 	if len(clients) == 0 {
 		return errors.New("no usable peers found")
 	}
+	fmt.Printf("[STAGE] Main: Confirmed at least ONE successful peer connection! (Total: %d)\n", len(clients))
 
 	// START DOWNLOAD LOOP
 	if err := piece.DownloadLoop(tf, pm, writer, clients); err != nil {

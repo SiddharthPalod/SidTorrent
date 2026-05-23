@@ -20,7 +20,7 @@ func NewHandshake(infoHash [20]byte, peerID [20]byte) *Handshake {
 }
 
 func (h *Handshake) Serialize() []byte {
-	buf := make([]byte, len(h.Pstr)+len(h.Pstr)+49)
+	buf := make([]byte, len(h.Pstr)+49)
 	buf[0] = byte(len(h.Pstr))
 	curr := 1
 	curr += copy(buf[curr:], h.Pstr)
@@ -39,7 +39,7 @@ func ReadHandshake(buf []byte) (*Handshake, error) {
 	var infoHash [20]byte
 	copy(infoHash[:], buf[pstrlen+9:pstrlen+29])
 	var peerID [20]byte
-	copy(peerID[:], buf[pstrlen+29:])
+	copy(peerID[:], buf[pstrlen+29:pstrlen+49])
 	return &Handshake{
 		Pstr:     pstr,
 		InfoHash: infoHash,

@@ -26,6 +26,7 @@ func NewPieceAssembler(pieceIndex int, pieceSize int) *PieceAssembler {
 		PieceSize:   pieceSize,
 		Data:        make([]byte, pieceSize),
 		Received:    make([]bool, totalBlocks),
+		Requested:   make([]bool, totalBlocks),
 		TotalBlocks: totalBlocks,
 	}
 }
