@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SiddharthPalod/SidTorrent/internal/dht"
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
 	"github.com/SiddharthPalod/SidTorrent/internal/piece"
 	"github.com/SiddharthPalod/SidTorrent/internal/storage"
@@ -70,18 +71,60 @@ func run() error {
 		}
 	}
 
-	peers, err := tracker.GetPeers(tf)
-
+	// Initialize and bootstrap the Kademlia DHT Node for trackerless discovery
+	var dhtNode *dht.DHTNode
+	dhtNode, err = dht.NewDHTNode(6881)
 	if err != nil {
-		return fmt.Errorf("tracker failed: %w", err)
+		fmt.Printf("[STAGE] Main: Failed to bind DHT on port 6881 (%v), attempting dynamic port...\n", err)
+		dhtNode, err = dht.NewDHTNode(0)
 	}
 
-	fmt.Println(
-		"peer count:",
-		len(peers),
-	)
+	if err == nil {
+		defer dhtNode.Close()
+		fmt.Printf("[STAGE] Main: DHT Node successfully initialized (ID: %x). Bootstrapping...\n", dhtNode.ID)
+		dhtNode.Bootstrap()
+	} else {
+		fmt.Printf("[STAGE] Main: Failed to initialize DHT Node: %v\n", err)
+	}
 
+	// Fetch peers from trackers and DHT, merging uniquely
+	var peers []tracker.Peer
+	seenPeers := make(map[string]bool)
+
+	addPeer := func(p tracker.Peer) {
+		key := fmt.Sprintf("%s:%d", p.IP.String(), p.Port)
+		if !seenPeers[key] {
+			seenPeers[key] = true
+			peers = append(peers, p)
+		}
+	}
+
+	// 1. Fetch from trackers
+	trackerPeers, trackerErr := tracker.GetPeers(tf)
+	if trackerErr == nil {
+		for _, p := range trackerPeers {
+			addPeer(p)
+		}
+		fmt.Printf("[STAGE] Main: Trackers returned %d unique peers\n", len(trackerPeers))
+	} else {
+		fmt.Printf("[STAGE] Main: Tracker discovery failed/warned: %v\n", trackerErr)
+	}
+
+	// 2. Fetch from Kademlia DHT
+	if dhtNode != nil {
+		fmt.Println("[STAGE] Main: Querying Kademlia DHT for trackerless peers...")
+		dhtPeers := dhtNode.SearchPeers(tf.InfoHash)
+		for _, p := range dhtPeers {
+			addPeer(p)
+		}
+		fmt.Printf("[STAGE] Main: Kademlia DHT returned %d unique peers\n", len(dhtPeers))
+	}
+
+	fmt.Println("total unique peer count:", len(peers))
 	if len(peers) == 0 {
+		if trackerErr != nil {
+			return fmt.Errorf("no usable peers found (tracker error: %w)", trackerErr)
+		}
 		return errors.New("no usable peers found")
 	}
 

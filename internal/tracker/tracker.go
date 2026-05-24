@@ -164,78 +164,101 @@ func getHTTPPeers(base *url.URL, tf *torrent.TorrentFile, peerID string) ([]Peer
 		)
 	}
 
-	peerBytes, ok := root["peers"].([]byte)
-	if !ok {
-		return nil, fmt.Errorf("tracker response missing peers")
+	var peers []Peer
+	if peerBytes, ok := root["peers"].([]byte); ok {
+		peers = append(peers, parseCompactPeers(peerBytes, false)...)
 	}
 
-	peers := parseCompactPeers(peerBytes, false)
+	if peerBytes6, ok := root["peers6"].([]byte); ok {
+		fmt.Printf("[DEBUG] getHTTPPeers: found peers6, parsing compact IPv6 peers...\n")
+		peers = append(peers, parseCompactPeers(peerBytes6, true)...)
+	}
+
+	if len(peers) == 0 {
+		return nil, fmt.Errorf("tracker response missing both peers and peers6 fields")
+	}
 
 	fmt.Println("tracker returned peers:", len(peers))
-
 	return peers, nil
 }
 
-func getUDPPeers(announceURL *url.URL, tf *torrent.TorrentFile, peerID string, timeout time.Duration) ([]Peer, error) {
-	address := announceURL.Host
-	if _, _, err := net.SplitHostPort(address); err != nil {
-		address = net.JoinHostPort(announceURL.Host, "80")
-	}
-
-	var conn net.Conn
-	var err error
-	maxAttempts := 3
-
-	// Attempt dialing with backoff
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		dialTimeout := time.Duration(attempt*5) * time.Second
-		fmt.Printf("[STAGE] UDP Tracker: Dialing %s (attempt %d/%d, timeout: %v)\n", address, attempt, maxAttempts, dialTimeout)
-		
-		conn, err = net.DialTimeout("udp", address, dialTimeout)
-		if err == nil {
-			break
-		}
-		fmt.Printf("[STAGE] UDP Tracker: Dial failed for %s: %v\n", address, err)
-	}
+func tryUDPTrackerOnIP(address string, tf *torrent.TorrentFile, peerID string) ([]Peer, error) {
+	conn, err := net.DialTimeout("udp", address, 3*time.Second)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
 
-	// Apply a generous active transaction deadline
-	_ = conn.SetDeadline(time.Now().Add(20 * time.Second))
-
+	// Connect attempt - 2 retries
 	var connectionID int64
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		fmt.Printf("[STAGE] UDP Tracker: Sending connect request to %s (attempt %d/%d)\n", address, attempt, maxAttempts)
-		connectionID, err = udpConnect(conn)
-		if err == nil {
-			fmt.Printf("[STAGE] UDP Tracker: Received connect response (connection ID: %x)\n", connectionID)
+	var connectErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+		connectionID, connectErr = udpConnect(conn)
+		if connectErr == nil {
 			break
 		}
-		fmt.Printf("[STAGE] UDP Tracker: Connect request failed on attempt %d: %v\n", attempt, err)
-		time.Sleep(500 * time.Millisecond)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("udp connect error: %w", err)
+	if connectErr != nil {
+		return nil, connectErr
 	}
 
+	// Announce attempt - 2 retries
 	var peers []Peer
-	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		fmt.Printf("[STAGE] UDP Tracker: Sending announce request to %s (attempt %d/%d)\n", address, attempt, maxAttempts)
-		peers, err = udpAnnounce(conn, connectionID, tf, peerID)
-		if err == nil {
-			fmt.Printf("[STAGE] UDP Tracker: Received announce response with %d peers from %s\n", len(peers), address)
+	var announceErr error
+	for attempt := 1; attempt <= 2; attempt++ {
+		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+		peers, announceErr = udpAnnounce(conn, connectionID, tf, peerID)
+		if announceErr == nil {
 			break
 		}
-		fmt.Printf("[STAGE] UDP Tracker: Announce request failed on attempt %d: %v\n", attempt, err)
-		time.Sleep(500 * time.Millisecond)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("udp announce error: %w", err)
+	if announceErr != nil {
+		return nil, announceErr
 	}
 
 	return peers, nil
+}
+
+func getUDPPeers(announceURL *url.URL, tf *torrent.TorrentFile, peerID string, timeout time.Duration) ([]Peer, error) {
+	host, portStr, err := net.SplitHostPort(announceURL.Host)
+	if err != nil {
+		host = announceURL.Host
+		portStr = "80"
+	}
+
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return nil, fmt.Errorf("lookup host %s failed: %w", host, err)
+	}
+
+	// Support both IPv4 and IPv6, preferring IPv6
+	var orderedIPs []net.IP
+	for _, ip := range ips {
+		if ip.To4() == nil {
+			orderedIPs = append(orderedIPs, ip)
+		}
+	}
+	for _, ip := range ips {
+		if ip.To4() != nil {
+			orderedIPs = append(orderedIPs, ip)
+		}
+	}
+
+	var lastErr error
+	for _, ip := range orderedIPs {
+		address := net.JoinHostPort(ip.String(), portStr)
+		fmt.Printf("[STAGE] UDP Tracker: Trying IP %s for %s\n", address, announceURL.Host)
+
+		peers, err := tryUDPTrackerOnIP(address, tf, peerID)
+		if err == nil {
+			return peers, nil
+		}
+		fmt.Printf("[STAGE] UDP Tracker: IP %s failed: %v\n", address, err)
+		lastErr = err
+	}
+
+	return nil, fmt.Errorf("all IPs for %s failed: %w", announceURL.Host, lastErr)
 }
 
 func udpConnect(conn net.Conn) (int64, error) {
@@ -328,16 +351,24 @@ func udpAnnounce(conn net.Conn, connectionID int64, tf *torrent.TorrentFile, pee
 		return nil, fmt.Errorf("short udp announce response")
 	}
 
+	// [DEBUG] Announce response hex dump diagnostics
+	fmt.Printf("[DEBUG] announce response len=%d from %s\n", n, conn.RemoteAddr())
+	fmt.Printf("[DEBUG] raw=%x\n", resp[:n])
+
 	action := binary.BigEndian.Uint32(resp[0:4])
 	gotTransactionID := binary.BigEndian.Uint32(resp[4:8])
+
 	if action == udpActionError {
 		return nil, fmt.Errorf("udp tracker error: %s", string(resp[8:n]))
 	}
-	if action != udpActionAnnounce || gotTransactionID != transactionID {
-		return nil, fmt.Errorf("invalid udp announce response (action=%d, gotTxID=%x, wantTxID=%x)", action, gotTransactionID, transactionID)
+	if action != udpActionAnnounce {
+		return nil, fmt.Errorf("invalid udp announce response action (got=%d, want=%d)", action, udpActionAnnounce)
+	}
+	if gotTransactionID != transactionID {
+		return nil, fmt.Errorf("invalid udp announce response transaction ID (got=%x, want=%x)", gotTransactionID, transactionID)
 	}
 	if n < 20 {
-		return nil, fmt.Errorf("short udp announce response")
+		return nil, fmt.Errorf("short udp announce response: %d bytes (expected at least 20)", n)
 	}
 
 	isIPv6 := false
@@ -355,8 +386,10 @@ func parseCompactPeers(data []byte, isIPv6 bool) []Peer {
 		peerSize = 18
 	}
 
+	fmt.Printf("[DEBUG] parseCompactPeers: len(data)=%d, isIPv6=%t, peerSize=%d\n", len(data), isIPv6, peerSize)
+
 	if len(data)%peerSize != 0 {
-		fmt.Printf("warning: malformed compact peer list (length %d, expected multiple of %d)\n", len(data), peerSize)
+		fmt.Printf("[DEBUG] warning: malformed compact peer list (length %d, expected multiple of %d)\n", len(data), peerSize)
 	}
 
 	var peers []Peer
@@ -382,6 +415,11 @@ func parseCompactPeers(data []byte, isIPv6 bool) []Peer {
 			IP:   ip,
 			Port: port,
 		})
+	}
+
+	fmt.Printf("[DEBUG] parseCompactPeers: successfully parsed %d peers\n", len(peers))
+	for _, p := range peers {
+		fmt.Printf("  [DEBUG] parsed peer endpoint: %s:%d\n", p.IP, p.Port)
 	}
 
 	return peers
