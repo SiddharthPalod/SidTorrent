@@ -1,11 +1,13 @@
 package piece
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 
+	"github.com/SiddharthPalod/SidTorrent/internal/metrics"
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
 	"github.com/SiddharthPalod/SidTorrent/internal/storage"
 	"github.com/SiddharthPalod/SidTorrent/internal/torrent"
@@ -13,6 +15,7 @@ import (
 )
 
 func StartWorker(
+	ctx context.Context,
 	client *peer.Client,
 	tf *torrent.TorrentFile,
 	pm *PieceManager,
@@ -25,6 +28,13 @@ func StartWorker(
 	fmt.Printf("[STAGE] StartWorker: starting worker goroutine for peer %s\n", client.Conn.RemoteAddr())
 
 	for {
+		select {
+		case <-ctx.Done():
+			fmt.Printf("[STAGE] StartWorker: worker for %s exiting due to context cancellation\n", client.Conn.RemoteAddr())
+			return ctx.Err()
+		default:
+		}
+
 		pieceIndex, err := pm.NextPiece(client.State.Bitfield)
 		if err != nil {
 			fmt.Printf("[STAGE] StartWorker: no available pieces for peer %s to download\n", client.Conn.RemoteAddr())
@@ -43,7 +53,11 @@ func StartWorker(
 				client.Conn.RemoteAddr(),
 				err,
 			)
-			pm.MarkFailed(pieceIndex)
+			
+			metrics.GlobalMetrics.IncFailedPieces()
+			if !pm.MarkFailed(pieceIndex) {
+				return fmt.Errorf("piece %d exceeded max retries (%d), download incomplete", pieceIndex, pm.MaxRetries)
+			}
 
 			if isConnectionError(err) {
 				fmt.Printf("[STAGE] StartWorker: worker exiting, connection to peer %s lost\n", client.Conn.RemoteAddr())
@@ -62,7 +76,11 @@ func StartWorker(
 				pieceIndex,
 				client.Conn.RemoteAddr(),
 			)
-			pm.MarkFailed(pieceIndex)
+			
+			metrics.GlobalMetrics.IncFailedPieces()
+			if !pm.MarkFailed(pieceIndex) {
+				return fmt.Errorf("piece %d exceeded max retries (%d), download incomplete", pieceIndex, pm.MaxRetries)
+			}
 
 			client.State.CorruptCount++
 			if client.State.CorruptCount >= 2 {
@@ -80,13 +98,19 @@ func StartWorker(
 				pieceIndex,
 				err,
 			)
-			pm.MarkFailed(pieceIndex)
+			metrics.GlobalMetrics.IncFailedPieces()
+			if !pm.MarkFailed(pieceIndex) {
+				return fmt.Errorf("piece %d exceeded max retries (%d), download incomplete", pieceIndex, pm.MaxRetries)
+			}
 			continue
 		}
 
 		fmt.Printf("[STAGE] StartWorker: piece %d successfully written to disk storage!\n", pieceIndex)
 
 		pm.MarkComplete(pieceIndex, int64(len(data)))
+		metrics.GlobalMetrics.IncSuccessPieces()
+		metrics.GlobalMetrics.AddDownloaded(int64(len(data)))
+
 		fmt.Printf(
 			"[STAGE] StartWorker: piece %d completely processed!\n",
 			pieceIndex,

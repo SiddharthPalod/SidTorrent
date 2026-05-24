@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SiddharthPalod/SidTorrent/internal/metrics"
 	"github.com/SiddharthPalod/SidTorrent/internal/torrent"
 )
 
@@ -32,9 +33,9 @@ type DiskWriter struct {
 	cacheSize    int
 	maxCacheSize int
 
-	closeChan chan struct{}
-	wg        sync.WaitGroup
+	closeMu   sync.Mutex
 	closed    bool
+	wg        sync.WaitGroup
 }
 
 func NewDiskWriter(tf *torrent.TorrentFile, file *os.File) *DiskWriter {
@@ -44,7 +45,6 @@ func NewDiskWriter(tf *torrent.TorrentFile, file *os.File) *DiskWriter {
 		writeChan:    make(chan WriteRequest, DefaultQueueSize),
 		cache:        make(map[int][]byte),
 		maxCacheSize: DefaultMaxCacheSize,
-		closeChan:    make(chan struct{}),
 	}
 	dw.startWriterLoop()
 	return dw
@@ -52,23 +52,21 @@ func NewDiskWriter(tf *torrent.TorrentFile, file *os.File) *DiskWriter {
 
 func (dw *DiskWriter) WritePiece(pieceIndex int, data []byte) error {
 	dw.errMu.RLock()
-	defer dw.errMu.RUnlock()
-	if dw.err != nil {
-		return dw.err
-	}
-	dw.cacheMu.Lock()
-	closed := dw.closed
-	dw.cacheMu.Unlock()
-	if closed {
-		return errors.New("disk already closed")
+	err := dw.err
+	dw.errMu.RUnlock()
+	if err != nil {
+		return err
 	}
 
-	select {
-	case dw.writeChan <- WriteRequest{PieceIndex: pieceIndex, Data: data}:
-		return nil
-	case <-dw.closeChan:
-		return errors.New("disk writer closed")
+	dw.closeMu.Lock()
+	if dw.closed {
+		dw.closeMu.Unlock()
+		return errors.New("disk already closed")
 	}
+	// Hold lock while sending to guarantee writeChan isn't closed concurrently
+	dw.writeChan <- WriteRequest{PieceIndex: pieceIndex, Data: data}
+	dw.closeMu.Unlock()
+	return nil
 }
 
 func (dw *DiskWriter) getError() error {
@@ -102,16 +100,6 @@ func (dw *DiskWriter) startWriterLoop() {
 				}
 			case <-ticker.C:
 				dw.flush()
-			case <-dw.closeChan:
-				for {
-					select {
-					case req := <-dw.writeChan:
-						dw.addToCache(req.PieceIndex, req.Data)
-					default:
-						dw.flush()
-						return
-					}
-				}
 			}
 		}
 	}()
@@ -162,11 +150,18 @@ func (dw *DiskWriter) flush() {
 		}
 		data := pending[idx]
 		offset := int64(idx) * dw.tf.PieceLength
+		
+		startTime := time.Now()
 		_, err := dw.file.WriteAt(data, offset)
+		duration := time.Since(startTime)
+		
 		if err != nil {
 			dw.setError(fmt.Errorf("disk write failed at piece %d (offset %d): %w", idx, offset, err))
 			return
 		}
+		
+		// Record disk Write Latency
+		metrics.GlobalMetrics.RecordDiskWrite(duration)
 	}
 }
 
@@ -177,14 +172,15 @@ func (dw *DiskWriter) SetMaxCacheSize(size int) {
 }
 
 func (dw *DiskWriter) Close() error {
-	dw.cacheMu.Lock()
+	dw.closeMu.Lock()
 	if dw.closed {
-		dw.cacheMu.Unlock()
+		dw.closeMu.Unlock()
 		return nil
 	}
 	dw.closed = true
-	dw.cacheMu.Unlock()
-	close(dw.closeChan)
+	close(dw.writeChan) // Causes the startWriterLoop to read remaining then terminate
+	dw.closeMu.Unlock()
+
 	dw.wg.Wait()
 	return dw.getError()
 }

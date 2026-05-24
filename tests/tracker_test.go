@@ -229,3 +229,133 @@ func compactPeer(a, b, c, d byte, port uint16) []byte {
 	binary.BigEndian.PutUint16(peer[4:6], port)
 	return peer
 }
+
+func TestGetPeersHTTPTrackerIPv6(t *testing.T) {
+	ipv6Addr := net.ParseIP("2001:db8::1")
+	if ipv6Addr == nil {
+		t.Fatalf("failed to parse test IPv6 address")
+	}
+
+	ipv6Compact := make([]byte, 18)
+	copy(ipv6Compact[0:16], ipv6Addr)
+	binary.BigEndian.PutUint16(ipv6Compact[16:18], 51413)
+
+	workingTracker := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(bencode.Encode(map[string]interface{}{
+			"interval": int64(1800),
+			"peers6":   ipv6Compact,
+		}))
+	}))
+	defer workingTracker.Close()
+
+	tf := &torrent.TorrentFile{
+		Announce: workingTracker.URL,
+		Length:   12345,
+	}
+
+	peers, err := tracker.GetPeers(tf)
+	if err != nil {
+		t.Fatalf("GetPeers() with IPv6 error = %v", err)
+	}
+
+	if len(peers) != 1 {
+		t.Fatalf("len(peers) = %d, want 1", len(peers))
+	}
+	if got, want := peers[0].IP.String(), "2001:db8::1"; got != want {
+		t.Fatalf("peer IP = %s, want %s", got, want)
+	}
+	if got, want := peers[0].Port, uint16(51413); got != want {
+		t.Fatalf("peer port = %d, want %d", got, want)
+	}
+}
+
+func TestGetPeersUDPTrackerIPv6(t *testing.T) {
+	conn, err := net.ListenPacket("udp6", "[::1]:0")
+	if err != nil {
+		t.Fatalf("ListenPacket() error = %v", err)
+	}
+	defer conn.Close()
+
+	var infoHash [20]byte
+	copy(infoHash[:], []byte("01234567890123456789"))
+
+	serverErr := make(chan error, 1)
+	go fakeUDPTrackerIPv6(t, conn, infoHash, serverErr)
+
+	tf := &torrent.TorrentFile{
+		Announce: "udp://" + conn.LocalAddr().String() + "/announce",
+		Length:   12345,
+		InfoHash: infoHash,
+	}
+	peers, err := tracker.GetPeers(tf)
+	if err != nil {
+		t.Fatalf("GetPeers() error = %v", err)
+	}
+	if err := <-serverErr; err != nil {
+		t.Fatalf("fake tracker error = %v", err)
+	}
+
+	if len(peers) != 1 {
+		t.Fatalf("len(peers) = %d, want 1", len(peers))
+	}
+	if got, want := peers[0].IP.String(), "2001:db8::1"; got != want {
+		t.Fatalf("peer IP = %s, want %s", got, want)
+	}
+	if got, want := peers[0].Port, uint16(6881); got != want {
+		t.Fatalf("peer port = %d, want %d", got, want)
+	}
+}
+
+func fakeUDPTrackerIPv6(t *testing.T, conn net.PacketConn, infoHash [20]byte, errc chan<- error) {
+	t.Helper()
+	defer close(errc)
+
+	buf := make([]byte, 1500)
+	n, addr, err := conn.ReadFrom(buf)
+	if err != nil {
+		errc <- err
+		return
+	}
+	if n != 16 {
+		errc <- fmt.Errorf("connect request length = %d, want 16", n)
+		return
+	}
+	connectTxID := binary.BigEndian.Uint32(buf[12:16])
+	connectionID := uint64(0x1122334455667788)
+
+	connectResp := make([]byte, 16)
+	binary.BigEndian.PutUint32(connectResp[0:4], 0)
+	binary.BigEndian.PutUint32(connectResp[4:8], connectTxID)
+	binary.BigEndian.PutUint64(connectResp[8:16], connectionID)
+	if _, err := conn.WriteTo(connectResp, addr); err != nil {
+		errc <- err
+		return
+	}
+
+	n, addr, err = conn.ReadFrom(buf)
+	if err != nil {
+		errc <- err
+		return
+	}
+	if n != 98 {
+		errc <- fmt.Errorf("announce request length = %d, want 98", n)
+		return
+	}
+	announceTxID := binary.BigEndian.Uint32(buf[12:16])
+
+	announceResp := make([]byte, 38)
+	binary.BigEndian.PutUint32(announceResp[0:4], 1)
+	binary.BigEndian.PutUint32(announceResp[4:8], announceTxID)
+	binary.BigEndian.PutUint32(announceResp[8:12], 1800)
+	binary.BigEndian.PutUint32(announceResp[12:16], 1)
+	binary.BigEndian.PutUint32(announceResp[16:20], 2)
+	
+	ipv6Addr := net.ParseIP("2001:db8::1")
+	copy(announceResp[20:36], ipv6Addr)
+	binary.BigEndian.PutUint16(announceResp[36:38], 6881)
+
+	if _, err := conn.WriteTo(announceResp, addr); err != nil {
+		errc <- err
+		return
+	}
+}

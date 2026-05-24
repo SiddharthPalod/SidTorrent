@@ -17,7 +17,7 @@ func (t *TorrentFile) PieceLengthAt(index int) int64 {
 		index,
 	)
 	if err != nil {
-		panic(err)
+		return 0
 	}
 	return length
 }

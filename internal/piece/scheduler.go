@@ -1,10 +1,12 @@
 package piece
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
 
+	"github.com/SiddharthPalod/SidTorrent/internal/metrics"
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
 	"github.com/SiddharthPalod/SidTorrent/internal/storage"
 	"github.com/SiddharthPalod/SidTorrent/internal/torrent"
@@ -12,6 +14,7 @@ import (
 )
 
 func StartScheduler(
+	ctx context.Context,
 	tf *torrent.TorrentFile,
 	pm *PieceManager,
 	writer *storage.Writer,
@@ -35,6 +38,7 @@ func StartScheduler(
 		c.PeerChan = peerChan
 		activeClientsMu.Lock()
 		activeClients = append(activeClients, c)
+		metrics.GlobalMetrics.SetActivePeers(len(activeClients))
 		activeClientsMu.Unlock()
 
 		wg.Add(1)
@@ -47,6 +51,7 @@ func StartScheduler(
 						break
 					}
 				}
+				metrics.GlobalMetrics.SetActivePeers(len(activeClients))
 				activeClientsMu.Unlock()
 				wg.Done()
 			}()
@@ -54,17 +59,22 @@ func StartScheduler(
 			if err := c.SendExtensionHandshake(); err != nil {
 				fmt.Printf("[STAGE] PEX: Handshake failed to %s: %v\n", c.Conn.RemoteAddr(), err)
 			}
-			if err := StartWorker(c, tf, pm, writer, rl); err != nil {
-				errCh <- err
+			if err := StartWorker(ctx, c, tf, pm, writer, rl); err != nil {
+				// Don't send context.Canceled as error to errCh to allow silent exit
+				if err != context.Canceled {
+					errCh <- err
+				}
 			}
 		}()
 	}
+
 	for _, client := range clients {
 		addr := client.Conn.RemoteAddr().String()
 		peerPool[addr] = true
 		startPeerWorker(client)
 	}
 
+	// 1. Choke Manager evaluation loop
 	go func() {
 		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
@@ -72,13 +82,15 @@ func StartScheduler(
 			select {
 			case <-ticker.C:
 				cm.Evaluate()
+			case <-ctx.Done():
+				return
 			case <-stopCh:
 				return
 			}
 		}
 	}()
 
-	// Periodic PEX broadcast loop
+	// 2. Periodic PEX broadcast loop
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
@@ -106,16 +118,45 @@ func StartScheduler(
 					}
 				}
 				activeClientsMu.Unlock()
+			case <-ctx.Done():
+				return
 			case <-stopCh:
 				return
 			}
 		}
 	}()
-	// Reactive PEX Dialer Thread: Listens on peerChan and dials new peers on-the-fly!
+
+	// 3. Periodic Observability Reporter Loop
 	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
 		for {
 			select {
-			case addr := <-peerChan:
+			case <-ticker.C:
+				metrics.GlobalMetrics.Report()
+			case <-ctx.Done():
+				return
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+
+	// 4. Reactive PEX Dialer Thread: Listens on peerChan and dials new peers on-the-fly!
+	go func() {
+		pexSem := make(chan struct{}, 5) // Limit concurrent dynamics PEX dials to 5
+		defer func() {
+			// Drain peerChan on exit
+			for range peerChan {
+			}
+		}()
+
+		for {
+			select {
+			case addr, ok := <-peerChan:
+				if !ok {
+					return
+				}
 				peerPoolMu.Lock()
 				if peerPool[addr] {
 					peerPoolMu.Unlock()
@@ -123,11 +164,23 @@ func StartScheduler(
 				}
 				peerPool[addr] = true
 				peerPoolMu.Unlock()
-				fmt.Printf("[STAGE] PEX Dialer: Dynamically dialing newly discovered peer %s...\n", addr)
+
+				select {
+				case pexSem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				case <-stopCh:
+					return
+				}
+
 				go func(address string) {
+					defer func() { <-pexSem }()
+
 					if pm.IsBlacklisted(address) {
 						return
 					}
+					fmt.Printf("[STAGE] PEX Dialer: Dynamically dialing newly discovered peer %s...\n", address)
+
 					client, err := peer.ConnectTimeout(address, tf.InfoHash, 10*time.Second)
 					if err != nil {
 						return
@@ -138,15 +191,44 @@ func StartScheduler(
 						return
 					}
 					_ = client.SendInterested()
+
+					select {
+					case <-ctx.Done():
+						client.Conn.Close()
+						return
+					default:
+					}
+
 					startPeerWorker(client)
 				}(addr)
+
+			case <-ctx.Done():
+				return
 			case <-stopCh:
 				return
 			}
 		}
 	}()
 
-	wg.Wait()
+	// Wait for context cancellation, error, or workers to complete
+	doneCh := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(doneCh)
+	}()
+
+	select {
+	case <-doneCh:
+	case <-ctx.Done():
+		// Close all active connections to cancel startPeerWorker's read loop
+		activeClientsMu.Lock()
+		for _, c := range activeClients {
+			_ = c.Conn.Close()
+		}
+		activeClientsMu.Unlock()
+		wg.Wait()
+	}
+
 	close(errCh)
 
 	var lastErr error
@@ -155,6 +237,9 @@ func StartScheduler(
 	}
 	if pm.IsComplete() {
 		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	if lastErr != nil {
 		return fmt.Errorf("download stopped before completion: %w", lastErr)

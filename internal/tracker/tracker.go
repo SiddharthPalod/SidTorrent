@@ -235,36 +235,52 @@ func getHTTPPeers(base *url.URL, tf *torrent.TorrentFile, peerID string) ([]Peer
 	return peers, nil
 }
 
-func tryUDPTrackerOnIP(address string, tf *torrent.TorrentFile, peerID string) ([]Peer, error) {
-	conn, err := net.DialTimeout("udp", address, 3*time.Second)
+type UDPTrackerConfig struct {
+	InitialTimeout time.Duration
+	MaxRetries     int
+	BackoffFactor  float64
+}
+
+var defaultUDPConfig = UDPTrackerConfig{
+	InitialTimeout: 1500 * time.Millisecond,
+	MaxRetries:     3,
+	BackoffFactor:  2.0,
+}
+
+func tryUDPTrackerOnIP(address string, tf *torrent.TorrentFile, peerID string, cfg UDPTrackerConfig) ([]Peer, error) {
+	conn, err := net.DialTimeout("udp", address, cfg.InitialTimeout)
 	if err != nil {
 		return nil, err
 	}
 	defer conn.Close()
 
-	// Connect attempt - 2 retries
+	// Connect attempt - with retries and exponential backoff
 	var connectionID int64
 	var connectErr error
-	for attempt := 1; attempt <= 2; attempt++ {
-		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	timeout := cfg.InitialTimeout
+	for attempt := 1; attempt <= cfg.MaxRetries; attempt++ {
+		_ = conn.SetDeadline(time.Now().Add(timeout))
 		connectionID, connectErr = udpConnect(conn)
 		if connectErr == nil {
 			break
 		}
+		timeout = time.Duration(float64(timeout) * cfg.BackoffFactor)
 	}
 	if connectErr != nil {
 		return nil, connectErr
 	}
 
-	// Announce attempt - 2 retries
+	// Announce attempt - with retries and exponential backoff
 	var peers []Peer
 	var announceErr error
-	for attempt := 1; attempt <= 2; attempt++ {
-		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+	timeout = cfg.InitialTimeout
+	for attempt := 1; attempt <= cfg.MaxRetries; attempt++ {
+		_ = conn.SetDeadline(time.Now().Add(timeout))
 		peers, announceErr = udpAnnounce(conn, connectionID, tf, peerID)
 		if announceErr == nil {
 			break
 		}
+		timeout = time.Duration(float64(timeout) * cfg.BackoffFactor)
 	}
 	if announceErr != nil {
 		return nil, announceErr
@@ -303,7 +319,7 @@ func getUDPPeers(announceURL *url.URL, tf *torrent.TorrentFile, peerID string, t
 		address := net.JoinHostPort(ip.String(), portStr)
 		fmt.Printf("[STAGE] UDP Tracker: Trying IP %s for %s\n", address, announceURL.Host)
 
-		peers, err := tryUDPTrackerOnIP(address, tf, peerID)
+		peers, err := tryUDPTrackerOnIP(address, tf, peerID, defaultUDPConfig)
 		if err == nil {
 			return peers, nil
 		}

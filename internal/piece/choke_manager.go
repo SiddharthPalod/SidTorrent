@@ -49,9 +49,9 @@ func (cm *ChokeManager) Evaluate() {
 	if len(interested) == 0 {
 		return
 	}
-	// 3. Tit-for-Tat: Rank interested peers descending by speed
+	// 3. Tit-for-Tat: Rank interested peers descending by score
 	sort.Slice(interested, func(i, j int) bool {
-		return interested[i].State.DownloadRate > interested[j].State.DownloadRate
+		return interested[i].State.CalculateScore() > interested[j].State.CalculateScore()
 	})
 	activeSlots := cm.MaxUploads - 1 // 1 slot kept for Optimistic Unchoke
 	if len(interested) < activeSlots {

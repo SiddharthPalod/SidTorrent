@@ -1,15 +1,19 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 
+	"github.com/SiddharthPalod/SidTorrent/internal/config"
 	"github.com/SiddharthPalod/SidTorrent/internal/dht"
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
 	"github.com/SiddharthPalod/SidTorrent/internal/piece"
@@ -20,13 +24,29 @@ import (
 )
 
 func main() {
-	if err := run(); err != nil {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		fmt.Println("\nShutdown initiated...")
+		cancel()
+	}()
+
+	if err := run(ctx); err != nil {
+		if errors.Is(err, context.Canceled) {
+			fmt.Println("Shutdown complete")
+			return
+		}
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
-func run() error {
+func run(ctx context.Context) error {
 	var outputPath string
 	flag.StringVar(&outputPath, "out", "", "output file path")
 	var maxDownloadKB int64
@@ -44,38 +64,27 @@ func run() error {
 	}
 
 	torrentPath := flag.Arg(0)
-	tf, err := torrent.Open(
-		torrentPath,
-	)
-
+	tf, err := torrent.Open(torrentPath)
 	if err != nil {
 		return fmt.Errorf("load torrent: %w", err)
 	}
 
-	fmt.Println(
-		"torrent loaded:",
-		tf.Name,
-	)
+	fmt.Println("torrent loaded:", tf.Name)
 
 	// DEBUG TRACKERS
 	fmt.Println("trackers:")
 	for i, tier := range tf.Trackers {
-		fmt.Printf(
-			"tier %d:\n",
-			i,
-		)
-
+		fmt.Printf("tier %d:\n", i)
 		for _, tr := range tier {
-
 			fmt.Println("  ", tr)
 		}
 	}
 
 	// Initialize and bootstrap the Kademlia DHT Node for trackerless discovery
 	var dhtNode *dht.DHTNode
-	dhtNode, err = dht.NewDHTNode(6881)
+	dhtNode, err = dht.NewDHTNode(config.GlobalConfig.DHTPort)
 	if err != nil {
-		fmt.Printf("[STAGE] Main: Failed to bind DHT on port 6881 (%v), attempting dynamic port...\n", err)
+		fmt.Printf("[STAGE] Main: Failed to bind DHT on port %d (%v), attempting dynamic port...\n", config.GlobalConfig.DHTPort, err)
 		dhtNode, err = dht.NewDHTNode(0)
 	}
 
@@ -131,41 +140,35 @@ func run() error {
 	// piece manager
 	pm := piece.NewPieceManager(tf)
 
-	pending,
-		inProgress,
-		completed := pm.Stats()
-
-	fmt.Printf(
-		"piece manager => pending=%d inprogress=%d completed=%d\n",
-		pending,
-		inProgress,
-		completed,
-	)
-
 	if outputPath == "" {
 		outputPath = filepath.Join("downloads", tf.Name)
 	}
 
 	outputDir := filepath.Dir(outputPath)
 	if outputDir != "." {
-		err = os.MkdirAll(
-			outputDir,
-			os.ModePerm,
-		)
+		err = os.MkdirAll(outputDir, os.ModePerm)
 		if err != nil {
 			return fmt.Errorf("create output directory: %w", err)
 		}
 	}
 
-	writer, err := storage.NewWriter(
-		tf,
-		outputPath,
-	)
-
+	writer, err := storage.NewWriter(tf, outputPath)
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
 	defer writer.Close()
+
+	// Load resume state: sequentially scans and verifies existing blocks on disk
+	if err := pm.LoadExistingState(outputPath, tf); err != nil {
+		fmt.Printf("[STAGE] Resume: Warning: resume verification failed: %v\n", err)
+	}
+
+	pending, inProgress, completed := pm.Stats()
+	fmt.Printf("piece manager => pending=%d inprogress=%d completed=%d\n", pending, inProgress, completed)
+	if pm.IsComplete() {
+		fmt.Println("torrent already fully downloaded and verified!")
+		return nil
+	}
 
 	// connect multiple peers concurrently
 	var clients []*peer.Client
@@ -173,71 +176,76 @@ func run() error {
 	totalPieces := tf.PieceCount()
 
 	var wg sync.WaitGroup
-	// Limit maximum concurrent connection attempts to 20 to avoid descriptor exhaustion
-	sem := make(chan struct{}, 20)
-
+	
+	// Concurrent worker pool to dial peers safely
+	peerChan := make(chan tracker.Peer, len(peers))
 	for _, p := range peers {
-		mu.Lock()
-		if len(clients) >= 10 {
-			mu.Unlock()
-			break
-		}
-		mu.Unlock()
+		peerChan <- p
+	}
+	close(peerChan)
 
+	maxWorkers := 20
+	for i := 0; i < maxWorkers; i++ {
 		wg.Add(1)
-		go func(ip net.IP, port uint16) {
+		go func() {
 			defer wg.Done()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case p, ok := <-peerChan:
+					if !ok {
+						return
+					}
 
-			sem <- struct{}{}
-			defer func() { <-sem }()
+					// Verify active connections limit before dialing
+					mu.Lock()
+					if len(clients) >= config.GlobalConfig.MaxActiveConnections {
+						mu.Unlock()
+						return
+					}
+					mu.Unlock()
 
-			// Check again if we already have enough before dialing
-			mu.Lock()
-			if len(clients) >= 10 {
-				mu.Unlock()
-				return
+					address := net.JoinHostPort(p.IP.String(), fmt.Sprintf("%d", p.Port))
+					if pm.IsBlacklisted(address) {
+						continue
+					}
+					fmt.Printf("[STAGE] Main: Attempting to connect to peer %s...\n", address)
+
+					client, err := peer.ConnectTimeout(address, tf.InfoHash, config.GlobalConfig.TrackerDialTimeout)
+					if err != nil {
+						fmt.Printf("[STAGE] Main: Connection or handshake failed with peer %s: %v\n", address, err)
+						continue
+					}
+					fmt.Printf("[STAGE] Main: Handshake successful with peer %s\n", address)
+
+					err = client.ReadBitField(totalPieces)
+					if err != nil {
+						fmt.Printf("[STAGE] Main: Bitfield read failed from peer %s: %v\n", address, err)
+						_ = client.Conn.Close()
+						continue
+					}
+					fmt.Printf("[STAGE] Main: Bitfield successfully read from peer %s\n", address)
+
+					err = client.SendInterested()
+					if err != nil {
+						fmt.Printf("[STAGE] Main: Sending 'interested' failed to peer %s: %v\n", address, err)
+						_ = client.Conn.Close()
+						continue
+					}
+					fmt.Printf("[STAGE] Main: Sent 'interested' message to peer %s\n", address)
+
+					mu.Lock()
+					if len(clients) < config.GlobalConfig.MaxActiveConnections {
+						clients = append(clients, client)
+						fmt.Printf("[STAGE] Main: Peer %s successfully added to pool! (Total active: %d)\n", address, len(clients))
+					} else {
+						_ = client.Conn.Close()
+					}
+					mu.Unlock()
+				}
 			}
-			mu.Unlock()
-
-			address := net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port))
-			if pm.IsBlacklisted(address) {
-				return
-			}
-			fmt.Printf("[STAGE] Main: Attempting to connect to peer %s...\n", address)
-
-			client, err := peer.ConnectTimeout(address, tf.InfoHash, 15*time.Second)
-			if err != nil {
-				fmt.Printf("[STAGE] Main: Connection or handshake failed with peer %s: %v\n", address, err)
-				return
-			}
-			fmt.Printf("[STAGE] Main: Handshake successful with peer %s\n", address)
-
-			err = client.ReadBitField(totalPieces)
-			if err != nil {
-				fmt.Printf("[STAGE] Main: Bitfield read failed from peer %s: %v\n", address, err)
-				_ = client.Conn.Close()
-				return
-			}
-			fmt.Printf("[STAGE] Main: Bitfield successfully read from peer %s\n", address)
-
-			err = client.SendInterested()
-			if err != nil {
-				fmt.Printf("[STAGE] Main: Sending 'interested' failed to peer %s: %v\n", address, err)
-				_ = client.Conn.Close()
-				return
-			}
-			fmt.Printf("[STAGE] Main: Sent 'interested' message to peer %s\n", address)
-
-			mu.Lock()
-			if len(clients) < 10 {
-				clients = append(clients, client)
-				fmt.Printf("[STAGE] Main: Peer %s successfully added to pool! (Total active: %d)\n", address, len(clients))
-			} else {
-				// We already reached 10, close this one
-				_ = client.Conn.Close()
-			}
-			mu.Unlock()
-		}(p.IP, p.Port)
+		}()
 	}
 
 	wg.Wait()
@@ -246,34 +254,26 @@ func run() error {
 	if len(clients) == 0 {
 		return errors.New("no usable peers found")
 	}
-	fmt.Printf("[STAGE] Main: Confirmed at least ONE successful peer connection! (Total: %d)\n", len(clients))
 
 	var rl *util.RateLimiter
 	if maxDownloadKB > 0 {
 		rl = util.NewRateLimiter(maxDownloadKB * 1024)
+		defer rl.Close()
 		fmt.Printf("[STAGE] Main: Enabled download speed cap at %d KB/s\n", maxDownloadKB)
 	}
 
 	// START DOWNLOAD LOOP
-	if err := piece.DownloadLoop(tf, pm, writer, clients, rl); err != nil {
+	if err := piece.DownloadLoop(ctx, tf, pm, writer, clients, rl); err != nil {
 		return fmt.Errorf("download failed: %w", err)
 	}
 
 	pending, inProgress, completed = pm.Stats()
-	fmt.Printf(
-		"FINAL => pending=%d inprogress=%d completed=%d\n",
-		pending,
-		inProgress,
-		completed,
-	)
+	fmt.Printf("FINAL => pending=%d inprogress=%d completed=%d\n", pending, inProgress, completed)
 
 	for _, client := range clients {
 		_ = client.Conn.Close()
 	}
 
-	fmt.Println(
-		"download finished:",
-		outputPath,
-	)
+	fmt.Println("download finished:", outputPath)
 	return nil
 }

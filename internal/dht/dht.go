@@ -141,7 +141,7 @@ func (dht *DHTNode) handleQuery(m map[string]interface{}, raddr *net.UDPAddr) {
 					"id": dht.ID[:],
 				},
 			}
-			_, _ = dht.conn.WriteToUDP(bencode.Encode(resp), raddr)
+			dht.writeUDP(bencode.Encode(resp), raddr)
 		case "find_node":
 			target, _ := a["target"].([]byte)
 			if len(target) != 20 {
@@ -158,7 +158,7 @@ func (dht *DHTNode) handleQuery(m map[string]interface{}, raddr *net.UDPAddr) {
 					"nodes": packCompactNodes(closest),
 				},
 			}
-			_, _ = dht.conn.WriteToUDP(bencode.Encode(resp), raddr)
+			dht.writeUDP(bencode.Encode(resp), raddr)
 		case "get_peers":
 			info, _ := a["info_hash"].([]byte)
 			if len(info) != 20 {
@@ -190,7 +190,7 @@ func (dht *DHTNode) handleQuery(m map[string]interface{}, raddr *net.UDPAddr) {
 				"y": "r",
 				"r": rDict,
 			}
-			_, _ = dht.conn.WriteToUDP(bencode.Encode(resp), raddr)
+			dht.writeUDP(bencode.Encode(resp), raddr)
 		}
 	}
 }
@@ -241,7 +241,7 @@ func (dht *DHTNode) Bootstrap() {
 					"target": dht.ID[:],
 				},
 			}
-			_, _ = dht.conn.WriteToUDP(bencode.Encode(query), raddr)
+			dht.writeUDP(bencode.Encode(query), raddr)
 		}
 	}
 	// Sleep briefly to accumulate bootstrap responses
@@ -359,6 +359,13 @@ func (dht *DHTNode) Close() {
 	close(dht.closed)
 	_ = dht.conn.Close()
 	dht.wg.Wait()
+}
+
+func (dht *DHTNode) writeUDP(data []byte, raddr *net.UDPAddr) {
+	_, err := dht.conn.WriteToUDP(data, raddr)
+	if err != nil {
+		fmt.Printf("[DEBUG] DHT: Failed to write UDP packet to %s: %v\n", raddr, err)
+	}
 }
 
 func parseCompactNodes(data []byte) []Contact {

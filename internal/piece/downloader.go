@@ -60,9 +60,11 @@ func DownloadPiece(
 		fmt.Printf("[STAGE] DownloadPiece: requesting block %d/%d (offset %d, len %d) from peer %s\n",
 			blockIndex+1, assembler.TotalBlocks, offset, length, client.Conn.RemoteAddr())
 
+		startTime := time.Now()
 		err := client.WriteMessage(req)
 
 		if err != nil {
+			client.State.TotalDownloads++
 			return nil, err
 		}
 
@@ -74,6 +76,7 @@ func DownloadPiece(
 			_ = client.Conn.SetReadDeadline(time.Time{})
 
 			if err != nil {
+				client.State.TotalDownloads++
 				return nil, err
 			}
 
@@ -86,6 +89,7 @@ func DownloadPiece(
 			case peer.MsgChoke:
 
 				client.State.Choked = true
+				client.State.TotalDownloads++
 
 				return nil, fmt.Errorf(
 					"peer choked during download",
@@ -119,11 +123,12 @@ func DownloadPiece(
 					err := ParsePiece(msg)
 
 				if err != nil {
+					client.State.TotalDownloads++
 					return nil, err
 				}
 
 				if receivedOffset != offset {
-
+					client.State.TotalDownloads++
 					return nil, fmt.Errorf(
 						"%w: got offset %d want %d",
 						ErrInvalidPieceBlock,
@@ -138,8 +143,16 @@ func DownloadPiece(
 				)
 
 				if err != nil {
+					client.State.TotalDownloads++
 					return nil, err
 				}
+
+				// Update score stats upon successful block download
+				rtt := time.Since(startTime)
+				client.State.LatencySum += rtt
+				client.State.LatencyCount++
+				client.State.SuccessfulDownloads++
+				client.State.TotalDownloads++
 
 				client.State.IntervalBytes += int64(len(block))
 				client.State.LastActive = time.Now()

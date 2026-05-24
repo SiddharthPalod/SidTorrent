@@ -1,6 +1,7 @@
 package piece
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
@@ -10,6 +11,7 @@ import (
 )
 
 func DownloadLoop(
+	ctx context.Context,
 	tf *torrent.TorrentFile,
 	pm *PieceManager,
 	writer *storage.Writer,
@@ -19,7 +21,7 @@ func DownloadLoop(
 	if len(clients) == 0 {
 		return fmt.Errorf("no connected peers")
 	}
-	if err := StartScheduler(tf, pm, writer, clients, rl); err != nil {
+	if err := StartScheduler(ctx, tf, pm, writer, clients, rl); err != nil {
 		return err
 	}
 	fmt.Println("torrent download complete")

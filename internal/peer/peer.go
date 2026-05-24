@@ -1,4 +1,4 @@
-package peer
+	package peer
 
 import (
 	"encoding/binary"
