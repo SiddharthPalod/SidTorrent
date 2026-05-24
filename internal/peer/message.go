@@ -16,6 +16,7 @@ const (
 	MsgBitfield      = 5
 	MsgRequest       = 6
 	MsgPiece         = 7
+	MsgExtended      = 20
 )
 
 var ErrMalformedBitfield = errors.New("malformed bitfield")

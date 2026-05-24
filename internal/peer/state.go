@@ -18,6 +18,8 @@ type PeerState struct {
 	InterestedInUs bool
 	IntervalBytes  int64
 	DownloadRate   float64
+	RemotePexID    int
+	CorruptCount   int
 
 	// lifecycle
 	LastActive time.Time

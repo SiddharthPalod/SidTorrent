@@ -25,7 +25,7 @@ func StartWorker(
 	fmt.Printf("[STAGE] StartWorker: starting worker goroutine for peer %s\n", client.Conn.RemoteAddr())
 
 	for {
-		pieceIndex, err := pm.NextRandomPiece(client.State.Bitfield)
+		pieceIndex, err := pm.NextPiece(client.State.Bitfield)
 		if err != nil {
 			fmt.Printf("[STAGE] StartWorker: no available pieces for peer %s to download\n", client.Conn.RemoteAddr())
 			return nil
@@ -58,10 +58,17 @@ func StartWorker(
 		err = VerifyPiece(tf, pieceIndex, data)
 		if err != nil {
 			fmt.Printf(
-				"[STAGE] StartWorker: piece %d verification failed!\n",
+				"[STAGE] StartWorker: piece %d verification failed from peer %s!\n",
 				pieceIndex,
+				client.Conn.RemoteAddr(),
 			)
 			pm.MarkFailed(pieceIndex)
+
+			client.State.CorruptCount++
+			if client.State.CorruptCount >= 2 {
+				pm.BlacklistPeer(client.Conn.RemoteAddr().String())
+				return fmt.Errorf("malicious peer %s: consistently sent corrupt data", client.Conn.RemoteAddr())
+			}
 			continue
 		}
 

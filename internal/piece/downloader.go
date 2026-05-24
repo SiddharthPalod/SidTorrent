@@ -60,9 +60,7 @@ func DownloadPiece(
 		fmt.Printf("[STAGE] DownloadPiece: requesting block %d/%d (offset %d, len %d) from peer %s\n",
 			blockIndex+1, assembler.TotalBlocks, offset, length, client.Conn.RemoteAddr())
 
-		_, err := client.Conn.Write(
-			req.Serialize(),
-		)
+		err := client.WriteMessage(req)
 
 		if err != nil {
 			return nil, err
@@ -108,6 +106,10 @@ func DownloadPiece(
 					return nil, err
 				}
 
+				continue
+
+			case peer.MsgExtended:
+				_ = client.HandleExtended(msg, client.PeerChan)
 				continue
 
 			case peer.MsgPiece:

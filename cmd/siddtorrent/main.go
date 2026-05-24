@@ -200,6 +200,9 @@ func run() error {
 			mu.Unlock()
 
 			address := net.JoinHostPort(ip.String(), fmt.Sprintf("%d", port))
+			if pm.IsBlacklisted(address) {
+				return
+			}
 			fmt.Printf("[STAGE] Main: Attempting to connect to peer %s...\n", address)
 
 			client, err := peer.ConnectTimeout(address, tf.InfoHash, 15*time.Second)

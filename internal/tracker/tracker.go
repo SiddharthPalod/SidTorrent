@@ -167,15 +167,68 @@ func getHTTPPeers(base *url.URL, tf *torrent.TorrentFile, peerID string) ([]Peer
 	var peers []Peer
 	if peerBytes, ok := root["peers"].([]byte); ok {
 		peers = append(peers, parseCompactPeers(peerBytes, false)...)
+	} else if peerList, ok := root["peers"].([]interface{}); ok {
+		for _, item := range peerList {
+			if peerDict, ok := item.(map[string]interface{}); ok {
+				var ipStr string
+				if ipBytes, ok := peerDict["ip"].([]byte); ok {
+					ipStr = string(ipBytes)
+				} else if ipS, ok := peerDict["ip"].(string); ok {
+					ipStr = ipS
+				}
+				var port int64
+				if pVal, ok := peerDict["port"].(int64); ok {
+					port = pVal
+				}
+				if ipStr != "" && port > 0 && port <= 65535 {
+					ip := net.ParseIP(ipStr)
+					if ip != nil {
+						peers = append(peers, Peer{
+							IP:   ip,
+							Port: uint16(port),
+						})
+					}
+				}
+			}
+		}
 	}
 
 	if peerBytes6, ok := root["peers6"].([]byte); ok {
 		fmt.Printf("[DEBUG] getHTTPPeers: found peers6, parsing compact IPv6 peers...\n")
 		peers = append(peers, parseCompactPeers(peerBytes6, true)...)
+	} else if peerList6, ok := root["peers6"].([]interface{}); ok {
+		fmt.Printf("[DEBUG] getHTTPPeers: found peers6 list, parsing IPv6 dictionary peers...\n")
+		for _, item := range peerList6 {
+			if peerDict, ok := item.(map[string]interface{}); ok {
+				var ipStr string
+				if ipBytes, ok := peerDict["ip"].([]byte); ok {
+					ipStr = string(ipBytes)
+				} else if ipS, ok := peerDict["ip"].(string); ok {
+					ipStr = ipS
+				}
+				var port int64
+				if pVal, ok := peerDict["port"].(int64); ok {
+					port = pVal
+				}
+				if ipStr != "" && port > 0 && port <= 65535 {
+					ip := net.ParseIP(ipStr)
+					if ip != nil {
+						peers = append(peers, Peer{
+							IP:   ip,
+							Port: uint16(port),
+						})
+					}
+				}
+			}
+		}
 	}
 
 	if len(peers) == 0 {
-		return nil, fmt.Errorf("tracker response missing both peers and peers6 fields")
+		var keys []string
+		for k, v := range root {
+			keys = append(keys, fmt.Sprintf("%s (%T)", k, v))
+		}
+		return nil, fmt.Errorf("tracker response missing both peers and peers6 fields. Keys present: %v", keys)
 	}
 
 	fmt.Println("tracker returned peers:", len(peers))
