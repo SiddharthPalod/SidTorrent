@@ -44,10 +44,13 @@ func TestStorageWriterWritesPieceAtCorrectOffset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewWriter() error = %v", err)
 	}
-	defer w.Close()
 
 	if err := w.WritePiece(1, []byte("abcd")); err != nil {
+		w.Close()
 		t.Fatalf("WritePiece() error = %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
