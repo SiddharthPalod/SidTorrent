@@ -2,14 +2,13 @@ package storage
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/SiddharthPalod/SidTorrent/internal/disk"
 	"github.com/SiddharthPalod/SidTorrent/internal/torrent"
 )
 
 type Writer struct {
-	file       *os.File
+	store      Storage
 	tf         *torrent.TorrentFile
 	diskWriter *disk.DiskWriter
 }
@@ -19,22 +18,14 @@ func NewWriter(
 	outputPath string,
 ) (*Writer, error) {
 
-	file, err := os.OpenFile(
-		outputPath,
-		os.O_CREATE|os.O_RDWR, 0644)
+	store, err := NewTorrentStorage(tf, outputPath)
 	if err != nil {
 		return nil, err
 	}
 
-	err = file.Truncate(tf.Length)
-	if err != nil {
-		_ = file.Close()
-		return nil, err
-	}
+	diskWriter := disk.NewDiskWriter(tf, store)
 
-	diskWriter := disk.NewDiskWriter(tf, file)
-
-	return &Writer{file: file, tf: tf, diskWriter: diskWriter}, nil
+	return &Writer{store: store, tf: tf, diskWriter: diskWriter}, nil
 
 }
 
@@ -46,11 +37,15 @@ func (w *Writer) WritePiece(pieceIndex int, data []byte) error {
 	return w.diskWriter.WritePiece(pieceIndex, data)
 }
 
+func (w *Writer) ReadAt(p []byte, off int64) (n int, err error) {
+	return w.store.ReadAt(p, off)
+}
+
 func (w *Writer) Close() error {
 	err := w.diskWriter.Close()
-	fileErr := w.file.Close()
+	storeErr := w.store.Close()
 	if err != nil {
 		return err
 	}
-	return fileErr
+	return storeErr
 }

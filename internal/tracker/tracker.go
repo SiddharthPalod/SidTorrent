@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/SiddharthPalod/SidTorrent/internal/bencode"
@@ -42,42 +43,33 @@ func GetPeers(tf *torrent.TorrentFile) ([]Peer, error) {
 		return nil, fmt.Errorf("torrent has no announce trackers")
 	}
 
-	// Prioritize HTTP/HTTPS trackers first for easier initial debugging
-	var httpTiers [][]string
-	var udpTiers [][]string
-
+	var allAnnounces []string
 	for _, tier := range trackerTiers {
-		var httpTier []string
-		var udpTier []string
 		for _, announce := range tier {
-			u, err := url.Parse(announce)
-			if err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-				httpTier = append(httpTier, announce)
-			} else {
-				udpTier = append(udpTier, announce)
+			if announce != "" {
+				allAnnounces = append(allAnnounces, announce)
 			}
-		}
-		if len(httpTier) > 0 {
-			httpTiers = append(httpTiers, httpTier)
-		}
-		if len(udpTier) > 0 {
-			udpTiers = append(udpTiers, udpTier)
 		}
 	}
 
-	orderedTiers := append(httpTiers, udpTiers...)
-
+	var mu sync.Mutex
 	var allPeers []Peer
 	seenPeers := make(map[string]bool)
 	var errs []error
+	var wg sync.WaitGroup
 
-	for tierIndex, tier := range orderedTiers {
-		for _, announce := range tier {
-			peers, err := getPeersFromAnnounce(announce, tf, peerID)
+	for _, announce := range allAnnounces {
+		wg.Add(1)
+		go func(ann string) {
+			defer wg.Done()
+			peers, err := getPeersFromAnnounce(ann, tf, peerID)
 			if err != nil {
-				errs = append(errs, fmt.Errorf("tier %d %s: %w", tierIndex, announce, err))
-				continue
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("%s: %w", ann, err))
+				mu.Unlock()
+				return
 			}
+			mu.Lock()
 			for _, p := range peers {
 				key := fmt.Sprintf("%s:%d", p.IP.String(), p.Port)
 				if !seenPeers[key] {
@@ -85,8 +77,11 @@ func GetPeers(tf *torrent.TorrentFile) ([]Peer, error) {
 					allPeers = append(allPeers, p)
 				}
 			}
-		}
+			mu.Unlock()
+		}(announce)
 	}
+
+	wg.Wait()
 
 	if len(allPeers) > 0 {
 		return allPeers, nil

@@ -30,6 +30,7 @@ type DHTNode struct {
 }
 
 func NewDHTNode(port int) (*DHTNode, error) {
+	fmt.Println("[WARNING] DHT: Mainline DHT support is currently experimental.")
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, err

@@ -14,6 +14,11 @@ type Config struct {
 	DiskMaxCacheSize    int
 	DiskFlushInterval    time.Duration
 	MaxActiveConnections int
+	IncomingPort         int
+	EnableEncryption     bool
+	EnableUPnP           bool
+	MaxUploadKB          int64
+	PipelineQueueSize    int
 }
 
 var GlobalConfig = Config{
@@ -31,5 +36,12 @@ var GlobalConfig = Config{
 	PieceStreamingWindow: 15,
 	DiskMaxCacheSize:    4 * 1024 * 1024, // 4MB
 	DiskFlushInterval:    2 * time.Second,
-	MaxActiveConnections: 10,
+	MaxActiveConnections: 100,
+	IncomingPort:         6881,
+	EnableEncryption:     false,
+	EnableUPnP:           false,
+	MaxUploadKB:          0, // 0 for unlimited
+	PipelineQueueSize:    8, // Keep up to 8 requests in-flight
 }
+
+

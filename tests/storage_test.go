@@ -95,3 +95,63 @@ func TestStorageWriterRejectsWrongPieceSize(t *testing.T) {
 		t.Fatal("WritePiece() succeeded with wrong piece size, want error")
 	}
 }
+
+func TestMultiFileStorageReadWrite(t *testing.T) {
+	tf := &torrent.TorrentFile{
+		Name:        "multi",
+		Length:      15,
+		PieceLength: 5,
+		IsMultiFile: true,
+		Files: []torrent.FileEntry{
+			{Length: 5, Path: []string{"a.txt"}},
+			{Length: 10, Path: []string{"sub", "b.txt"}},
+		},
+	}
+
+	tempDir := t.TempDir()
+	store, err := storage.NewTorrentStorage(tf, tempDir)
+	if err != nil {
+		t.Fatalf("failed to create TorrentStorage: %v", err)
+	}
+	defer store.Close()
+
+	// Write 15 bytes crossing file boundaries
+	data := []byte("12345abcdefghij")
+	n, err := store.WriteAt(data, 0)
+	if err != nil {
+		t.Fatalf("failed to write: %v", err)
+	}
+	if n != 15 {
+		t.Fatalf("expected to write 15 bytes, wrote %d", n)
+	}
+
+	// Verify file content directly
+	aContent, err := os.ReadFile(filepath.Join(tempDir, "a.txt"))
+	if err != nil {
+		t.Fatalf("failed to read a.txt: %v", err)
+	}
+	if string(aContent) != "12345" {
+		t.Fatalf("a.txt = %q, expected '12345'", string(aContent))
+	}
+
+	bContent, err := os.ReadFile(filepath.Join(tempDir, "sub", "b.txt"))
+	if err != nil {
+		t.Fatalf("failed to read sub/b.txt: %v", err)
+	}
+	if string(bContent) != "abcdefghij" {
+		t.Fatalf("sub/b.txt = %q, expected 'abcdefghij'", string(bContent))
+	}
+
+	// Read back through storage
+	readBuf := make([]byte, 15)
+	rn, err := store.ReadAt(readBuf, 0)
+	if err != nil {
+		t.Fatalf("failed to read back: %v", err)
+	}
+	if rn != 15 {
+		t.Fatalf("expected to read 15 bytes, read %d", rn)
+	}
+	if string(readBuf) != "12345abcdefghij" {
+		t.Fatalf("read back = %q, expected '12345abcdefghij'", string(readBuf))
+	}
+}

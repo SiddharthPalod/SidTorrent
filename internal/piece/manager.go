@@ -5,7 +5,6 @@ import (
 	"io"
 	"math/rand"
 	"net"
-	"os"
 	"sort"
 	"sync"
 
@@ -41,6 +40,7 @@ type PieceManager struct {
 	// Phase 9: Blacklisted peers (Corrupt Peer Detection)
 	BlacklistedPeers   map[string]bool
 	BlacklistedPeersMu sync.Mutex
+	PriorityPieces     map[int]bool
 	mu                 sync.Mutex
 }
 
@@ -61,6 +61,7 @@ func NewPieceManager(tf *torrent.TorrentFile) *PieceManager {
 		StreamingMode:       true, // Enable Streaming Mode by default
 		StreamingWindowSize: 15,   // Download the first 15 pieces sequentially
 		BlacklistedPeers:    make(map[string]bool),
+		PriorityPieces:      make(map[int]bool),
 	}
 
 	pm.buckets[0] = make(map[int]bool)
@@ -73,12 +74,21 @@ func NewPieceManager(tf *torrent.TorrentFile) *PieceManager {
 	return pm
 }
 
+func (pm *PieceManager) SetStreaming(enabled bool, windowSize int) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.StreamingMode = enabled
+	if windowSize > 0 {
+		pm.StreamingWindowSize = windowSize
+	}
+}
+
 func (pm *PieceManager) ensureBucketsSync() {
 	totalInBuckets := 0
 	for _, bk := range pm.buckets {
 		totalInBuckets += len(bk)
 	}
-	
+
 	actualSum := 0
 	for _, v := range pm.Availability {
 		actualSum += v
@@ -97,21 +107,12 @@ func (pm *PieceManager) ensureBucketsSync() {
 	}
 }
 
-func (pm *PieceManager) LoadExistingState(outputPath string, tf *torrent.TorrentFile) error {
-	file, err := os.Open(outputPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil // No file exists yet, start fresh
-		}
-		return err
-	}
-	defer file.Close()
-
+func (pm *PieceManager) LoadExistingState(reader io.ReaderAt, tf *torrent.TorrentFile) error {
 	fmt.Println("[STAGE] Resume: Scanning and verifying existing download file...")
 	buf := make([]byte, tf.PieceLength)
 	for i := 0; i < pm.TotalPieces; i++ {
 		pieceLen := tf.PieceLengthAt(i)
-		_, err := file.ReadAt(buf[:pieceLen], int64(i)*tf.PieceLength)
+		_, err := reader.ReadAt(buf[:pieceLen], int64(i)*tf.PieceLength)
 		if err != nil {
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				// Rest of file hasn't been downloaded or allocated yet
@@ -234,10 +235,41 @@ func (pm *PieceManager) IncrementAvailability(pieceIndex int) {
 }
 
 func (pm *PieceManager) NextPiece(available []bool) (int, error) {
+	pm.mu.Lock()
+	// 0. Prioritize pieces requested by the video stream (dynamic adaptive priority)
+	for idx := range pm.PriorityPieces {
+		if !pm.Completed[idx] {
+			if idx < len(available) && available[idx] {
+				pm.claimPiece(idx)
+				pm.mu.Unlock()
+				fmt.Printf("[STAGE] Streaming Engine: Prioritizing dynamic stream piece %d (even if in-progress)\n", idx)
+				return idx, nil
+			}
+		}
+	}
+	pm.mu.Unlock()
+
 	if pm.StreamingMode {
 		return pm.NextStreamingPiece(available)
 	}
 	return pm.NextRarestPiece(available)
+}
+
+func (pm *PieceManager) SetPriorityPieces(indices []int) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	pm.PriorityPieces = make(map[int]bool)
+	for _, idx := range indices {
+		if idx >= 0 && idx < pm.TotalPieces {
+			pm.PriorityPieces[idx] = true
+		}
+	}
+}
+
+func (pm *PieceManager) IsPieceComplete(pieceIndex int) bool {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	return pm.Completed[pieceIndex]
 }
 
 func (pm *PieceManager) NextStreamingPiece(available []bool) (int, error) {
@@ -338,6 +370,9 @@ func (pm *PieceManager) MarkComplete(pieceIndex int, bytes int64) {
 	pm.mu.Lock()
 	defer pm.mu.Unlock()
 	delete(pm.InProgress, pieceIndex)
+	if pm.Completed[pieceIndex] {
+		return
+	}
 	pm.Completed[pieceIndex] = true
 	pm.Downloaded += bytes
 
@@ -358,7 +393,7 @@ func (pm *PieceManager) MarkFailed(pieceIndex int) bool {
 		return false
 	}
 	pm.Pending[pieceIndex] = true
-	
+
 	// Add back to bucket
 	count := pm.Availability[pieceIndex]
 	if pm.buckets[count] == nil {
@@ -366,6 +401,20 @@ func (pm *PieceManager) MarkFailed(pieceIndex int) bool {
 	}
 	pm.buckets[count][pieceIndex] = true
 	return true
+}
+
+func (pm *PieceManager) ReturnToPending(pieceIndex int) {
+	pm.mu.Lock()
+	defer pm.mu.Unlock()
+	delete(pm.InProgress, pieceIndex)
+	pm.Pending[pieceIndex] = true
+
+	// Add back to bucket
+	count := pm.Availability[pieceIndex]
+	if pm.buckets[count] == nil {
+		pm.buckets[count] = make(map[int]bool)
+	}
+	pm.buckets[count][pieceIndex] = true
 }
 
 func (pm *PieceManager) IsComplete() bool {

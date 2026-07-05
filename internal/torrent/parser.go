@@ -9,6 +9,11 @@ import (
 	"github.com/SiddharthPalod/SidTorrent/internal/bencode"
 )
 
+type FileEntry struct {
+	Length int64
+	Path   []string
+}
+
 type TorrentFile struct {
 	Announce    string
 	Trackers    [][]string
@@ -18,6 +23,8 @@ type TorrentFile struct {
 	Pieces      []byte
 	InfoHash    [20]byte
 	RawInfo     []byte
+	Files       []FileEntry
+	IsMultiFile bool
 }
 
 func Open(path string) (*TorrentFile, error) {
@@ -47,6 +54,8 @@ func Open(path string) (*TorrentFile, error) {
 	}
 
 	var totalLength int64
+	var filesList []FileEntry
+	var isMultiFile bool
 
 	// SINGLE FILE
 	if length, ok := asInt(info["length"]); ok {
@@ -55,14 +64,29 @@ func Open(path string) (*TorrentFile, error) {
 
 	// MULTI FILE
 	if files, ok := info["files"].([]interface{}); ok {
-
+		isMultiFile = true
 		for _, f := range files {
-
-			fileMap := f.(map[string]interface{})
-
+			fileMap, ok := f.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			var fileLen int64
 			if l, ok := asInt(fileMap["length"]); ok {
+				fileLen = l
 				totalLength += l
 			}
+			var pathList []string
+			if pList, ok := fileMap["path"].([]interface{}); ok {
+				for _, p := range pList {
+					if pStr, ok := asString(p); ok {
+						pathList = append(pathList, pStr)
+					}
+				}
+			}
+			filesList = append(filesList, FileEntry{
+				Length: fileLen,
+				Path:   pathList,
+			})
 		}
 	}
 
@@ -73,6 +97,13 @@ func Open(path string) (*TorrentFile, error) {
 	name, ok := asString(info["name"])
 	if !ok {
 		return nil, errors.New("missing torrent name")
+	}
+
+	if !isMultiFile {
+		filesList = append(filesList, FileEntry{
+			Length: totalLength,
+			Path:   []string{name},
+		})
 	}
 
 	pieceLen, ok := asInt(info["piece length"])
@@ -117,6 +148,8 @@ func Open(path string) (*TorrentFile, error) {
 		Pieces:      pieces,
 		InfoHash:    hash,
 		RawInfo:     rawInfo,
+		Files:       filesList,
+		IsMultiFile: isMultiFile,
 	}
 
 	return tf, nil

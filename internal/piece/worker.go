@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	"github.com/SiddharthPalod/SidTorrent/internal/metrics"
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
@@ -21,11 +22,13 @@ func StartWorker(
 	pm *PieceManager,
 	writer *storage.Writer,
 	rl *util.RateLimiter,
+	completeChan chan struct{},
 ) error {
 	defer client.Conn.Close()
 	pm.RegisterPeerBitfield(client.State.Bitfield)
 	defer pm.UnregisterPeerBitfield(client.State.Bitfield)
 	fmt.Printf("[STAGE] StartWorker: starting worker goroutine for peer %s\n", client.Conn.RemoteAddr())
+
 
 	for {
 		select {
@@ -37,8 +40,17 @@ func StartWorker(
 
 		pieceIndex, err := pm.NextPiece(client.State.Bitfield)
 		if err != nil {
-			fmt.Printf("[STAGE] StartWorker: no available pieces for peer %s to download\n", client.Conn.RemoteAddr())
-			return nil
+			pending, inProgress, _ := pm.Stats()
+			if pending == 0 && inProgress == 0 {
+				fmt.Printf("[STAGE] StartWorker: no available pieces for peer %s to download\n", client.Conn.RemoteAddr())
+				return nil
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(1 * time.Second):
+				continue
+			}
 		}
 
 		pieceLength := int(tf.PieceLengthAt(pieceIndex))
@@ -55,9 +67,7 @@ func StartWorker(
 			)
 			
 			metrics.GlobalMetrics.IncFailedPieces()
-			if !pm.MarkFailed(pieceIndex) {
-				return fmt.Errorf("piece %d exceeded max retries (%d), download incomplete", pieceIndex, pm.MaxRetries)
-			}
+			pm.ReturnToPending(pieceIndex)
 
 			if isConnectionError(err) {
 				fmt.Printf("[STAGE] StartWorker: worker exiting, connection to peer %s lost\n", client.Conn.RemoteAddr())
@@ -118,6 +128,10 @@ func StartWorker(
 		PrintProgress(pm)
 		if pm.IsComplete() {
 			fmt.Println("[STAGE] StartWorker: torrent download completely finished!")
+			select {
+			case completeChan <- struct{}{}:
+			default:
+			}
 			return nil
 		}
 	}

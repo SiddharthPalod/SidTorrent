@@ -17,11 +17,13 @@ func DownloadLoop(
 	writer *storage.Writer,
 	clients []*peer.Client,
 	rl *util.RateLimiter,
+	opts SchedulerOptions,
 ) error {
-	if len(clients) == 0 {
+	if len(clients) == 0 && opts.IncomingClients == nil && !opts.EnablePEX {
 		return fmt.Errorf("no connected peers")
 	}
-	if err := StartScheduler(ctx, tf, pm, writer, clients, rl); err != nil {
+
+	if err := StartScheduler(ctx, tf, pm, writer, clients, rl, opts); err != nil {
 		return err
 	}
 	fmt.Println("torrent download complete")

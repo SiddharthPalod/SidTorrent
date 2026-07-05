@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/SiddharthPalod/SidTorrent/internal/config"
 	"github.com/SiddharthPalod/SidTorrent/internal/peer"
 	"github.com/SiddharthPalod/SidTorrent/internal/util"
 )
@@ -39,150 +40,139 @@ func DownloadPiece(
 	fmt.Printf("[STAGE] DownloadPiece: starting download for piece %d (%d blocks, %d bytes) from peer %s\n",
 		pieceIndex, assembler.TotalBlocks, pieceLength, client.Conn.RemoteAddr())
 
-	for blockIndex := 0; blockIndex < assembler.TotalBlocks; blockIndex++ {
+	maxOutstanding := config.GlobalConfig.PipelineQueueSize
+	if maxOutstanding <= 0 {
+		maxOutstanding = 8
+	}
 
-		offset := blockIndex * BlockSize
-
-		length := assembler.BlockLength(
-			blockIndex,
-		)
-
-		if rl != nil {
-			rl.Wait(int64(length))
+	// Function to queue up missing requests up to the maxOutstanding limit
+	queueRequests := func() error {
+		for {
+			outstanding := 0
+			for i := 0; i < assembler.TotalBlocks; i++ {
+				if assembler.Requested[i] && !assembler.Received[i] {
+					outstanding++
+				}
+			}
+			if outstanding >= maxOutstanding {
+				break
+			}
+			offset, length, ok := assembler.NextMissingBlock()
+			if !ok {
+				break
+			}
+			if rl != nil {
+				rl.Wait(int64(length))
+			}
+			req := RequestMessage(pieceIndex, offset, length)
+			err := client.WriteMessage(req)
+			if err != nil {
+				return err
+			}
 		}
+		return nil
+	}
 
-		req := RequestMessage(
-			pieceIndex,
-			offset,
-			length,
+	// Send initial batch of requests
+	if err := queueRequests(); err != nil {
+		return nil, err
+	}
+
+	for !assembler.IsComplete() {
+		_ = client.Conn.SetReadDeadline(time.Now().Add(45 * time.Second))
+		msg, err := peer.ReadMessage(
+			client.Conn,
 		)
-
-		fmt.Printf("[STAGE] DownloadPiece: requesting block %d/%d (offset %d, len %d) from peer %s\n",
-			blockIndex+1, assembler.TotalBlocks, offset, length, client.Conn.RemoteAddr())
-
-		startTime := time.Now()
-		err := client.WriteMessage(req)
+		_ = client.Conn.SetReadDeadline(time.Time{})
 
 		if err != nil {
 			client.State.TotalDownloads++
+			// Reset all outstanding requested blocks on error so they can be rescheduled
+			for i := 0; i < assembler.TotalBlocks; i++ {
+				if assembler.Requested[i] && !assembler.Received[i] {
+					assembler.ResetBlock(i * BlockSize)
+				}
+			}
 			return nil, err
 		}
 
-		for {
-			_ = client.Conn.SetReadDeadline(time.Now().Add(45 * time.Second))
-			msg, err := peer.ReadMessage(
-				client.Conn,
-			)
-			_ = client.Conn.SetReadDeadline(time.Time{})
+		if msg == nil {
+			continue
+		}
 
+		switch msg.ID {
+
+		case peer.MsgChoke:
+			client.State.Choked = true
+			client.State.TotalDownloads++
+			// Reset all outstanding requested blocks
+			for i := 0; i < assembler.TotalBlocks; i++ {
+				if assembler.Requested[i] && !assembler.Received[i] {
+					assembler.ResetBlock(i * BlockSize)
+				}
+			}
+			return nil, fmt.Errorf(
+				"peer choked during download",
+			)
+
+		case peer.MsgUnchoke:
+			client.State.Choked = false
+			fmt.Printf("[STAGE] peer.Connect: unchoked by peer %s\n", client.Conn.RemoteAddr())
+			if err := queueRequests(); err != nil {
+				return nil, err
+			}
+
+		case peer.MsgHave:
+			err := client.HandleHave(msg)
+			if err != nil {
+				return nil, err
+			}
+
+		case peer.MsgExtended:
+			_ = client.HandleExtended(msg, client.PeerChan)
+
+		case peer.MsgPiece:
+			receivedOffset, block, err := ParsePiece(msg)
 			if err != nil {
 				client.State.TotalDownloads++
 				return nil, err
 			}
 
-			if msg == nil {
-				continue
+			if receivedOffset%BlockSize != 0 {
+				client.State.TotalDownloads++
+				return nil, fmt.Errorf("%w: offset %d is not aligned to BlockSize", ErrInvalidPieceBlock, receivedOffset)
 			}
 
-			switch msg.ID {
-
-			case peer.MsgChoke:
-
-				client.State.Choked = true
-				client.State.TotalDownloads++
-
-				return nil, fmt.Errorf(
-					"peer choked during download",
-				)
-
-			case peer.MsgUnchoke:
-
-				client.State.Choked = false
-				fmt.Printf("[STAGE] peer.Connect: unchoked by peer %s\n", client.Conn.RemoteAddr())
-
-				continue
-
-			case peer.MsgHave:
-
-				err := client.HandleHave(msg)
-
-				if err != nil {
-					return nil, err
-				}
-
-				continue
-
-			case peer.MsgExtended:
-				_ = client.HandleExtended(msg, client.PeerChan)
-				continue
-
-			case peer.MsgPiece:
-
+			err = assembler.AddBlock(
 				receivedOffset,
-					block,
-					err := ParsePiece(msg)
-
-				if err != nil {
-					client.State.TotalDownloads++
-					return nil, err
-				}
-
-				if receivedOffset != offset {
-					client.State.TotalDownloads++
-					return nil, fmt.Errorf(
-						"%w: got offset %d want %d",
-						ErrInvalidPieceBlock,
-						receivedOffset,
-						offset,
-					)
-				}
-
-				err = assembler.AddBlock(
-					receivedOffset,
-					block,
-				)
-
-				if err != nil {
-					client.State.TotalDownloads++
-					return nil, err
-				}
-
-				// Update score stats upon successful block download
-				rtt := time.Since(startTime)
-				client.State.LatencySum += rtt
-				client.State.LatencyCount++
-				client.State.SuccessfulDownloads++
+				block,
+			)
+			if err != nil {
 				client.State.TotalDownloads++
+				return nil, fmt.Errorf("%w: %v", ErrInvalidPieceBlock, err)
+			}
 
-				client.State.IntervalBytes += int64(len(block))
-				client.State.LastActive = time.Now()
 
-				if blockIndex == 0 && receivedOffset == 0 {
-					fmt.Printf("[STAGE] peer.Connect: first block received from peer %s (piece %d, offset %d, size %d)\n",
-						client.Conn.RemoteAddr(), pieceIndex, receivedOffset, len(block))
-				}
+			// Update score stats upon successful block download
+			client.State.SuccessfulDownloads++
+			client.State.TotalDownloads++
+			client.State.IntervalBytes += int64(len(block))
+			client.State.LastActive = time.Now()
 
-				fmt.Printf(
-					"[STAGE] DownloadPiece: received block %d/%d (%d bytes) from peer %s\n",
-					blockIndex+1,
-					assembler.TotalBlocks,
-					len(block),
-					client.Conn.RemoteAddr(),
-				)
+			fmt.Printf(
+				"[STAGE] DownloadPiece: received block (offset %d, size %d) from peer %s\n",
+				receivedOffset,
+				len(block),
+				client.Conn.RemoteAddr(),
+			)
 
-				goto nextBlock
+			// Pipeline next blocks
+			if err := queueRequests(); err != nil {
+				return nil, err
 			}
 		}
-
-	nextBlock:
 	}
 
-	if !assembler.IsComplete() {
-
-		return nil, fmt.Errorf(
-			"piece incomplete",
-		)
-	}
 
 	return assembler.Data, nil
 }
@@ -192,10 +182,15 @@ func waitForUnchoke(
 ) error {
 
 	for client.State.Choked {
-
+		if client.Conn.RemoteAddr().Network() != "pipe" {
+			_ = client.Conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		}
 		msg, err := peer.ReadMessage(
 			client.Conn,
 		)
+		if client.Conn.RemoteAddr().Network() != "pipe" {
+			_ = client.Conn.SetReadDeadline(time.Time{})
+		}
 
 		if err != nil {
 			return err

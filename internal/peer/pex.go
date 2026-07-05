@@ -33,8 +33,7 @@ func (c *Client) SendExtensionHandshake() error {
 		ID:      MsgExtended,
 		Payload: extendedPayload,
 	}
-	_, err := c.Conn.Write(msg.Serialize())
-	return err
+	return c.WriteMessage(msg)
 }
 
 func (c *Client) SendPexMessage(added []string, remotePexID int) error {
@@ -67,7 +66,7 @@ func (c *Client) SendPexMessage(added []string, remotePexID int) error {
 		"added": add4Buf.Bytes(),
 	}
 	if add6Buf.Len() > 0 {
-		pexDict["added"] = add6Buf.Bytes()
+		pexDict["added6"] = add6Buf.Bytes()
 	}
 	bencoded := bencode.Encode(pexDict)
 	extendedPayload := make([]byte, 1+len(bencoded))
@@ -77,8 +76,7 @@ func (c *Client) SendPexMessage(added []string, remotePexID int) error {
 		ID:      MsgExtended,
 		Payload: extendedPayload,
 	}
-	_, err := c.Conn.Write(msg.Serialize())
-	return err
+	return c.WriteMessage(msg)
 }
 
 func (c *Client) HandleExtended(msg *Message, peerChan chan<- string) error {

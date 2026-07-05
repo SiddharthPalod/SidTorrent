@@ -3,7 +3,7 @@ package disk
 import (
 	"errors"
 	"fmt"
-	"os"
+	"io"
 	"sort"
 	"sync"
 	"time"
@@ -21,7 +21,7 @@ type WriteRequest struct {
 }
 
 type DiskWriter struct {
-	file *os.File
+	dest io.WriterAt
 	tf   *torrent.TorrentFile
 
 	writeChan chan WriteRequest
@@ -38,9 +38,9 @@ type DiskWriter struct {
 	wg        sync.WaitGroup
 }
 
-func NewDiskWriter(tf *torrent.TorrentFile, file *os.File) *DiskWriter {
+func NewDiskWriter(tf *torrent.TorrentFile, dest io.WriterAt) *DiskWriter {
 	dw := &DiskWriter{
-		file:         file,
+		dest:         dest,
 		tf:           tf,
 		writeChan:    make(chan WriteRequest, DefaultQueueSize),
 		cache:        make(map[int][]byte),
@@ -152,7 +152,7 @@ func (dw *DiskWriter) flush() {
 		offset := int64(idx) * dw.tf.PieceLength
 		
 		startTime := time.Now()
-		_, err := dw.file.WriteAt(data, offset)
+		_, err := dw.dest.WriteAt(data, offset)
 		duration := time.Since(startTime)
 		
 		if err != nil {

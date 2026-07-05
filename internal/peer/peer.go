@@ -1,12 +1,145 @@
-	package peer
+package peer
 
 import (
+	"bufio"
+	"bytes"
+	"crypto/rc4"
+	"crypto/sha1"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"time"
+
+	"github.com/SiddharthPalod/SidTorrent/internal/config"
 )
+
+type PeekConn struct {
+	net.Conn
+	r *bufio.Reader
+}
+
+func (c *PeekConn) Read(b []byte) (int, error) {
+	return c.r.Read(b)
+}
+
+type EncryptedConn struct {
+	net.Conn
+	enc *rc4.Cipher
+	dec *rc4.Cipher
+}
+
+func NewEncryptedConn(conn net.Conn, infoHash [20]byte, isInitiator bool) (*EncryptedConn, error) {
+	h1 := sha1.New()
+	h1.Write([]byte("SiddTorrentKeyA"))
+	h1.Write(infoHash[:])
+	keyA := h1.Sum(nil)
+
+	h2 := sha1.New()
+	h2.Write([]byte("SiddTorrentKeyB"))
+	h2.Write(infoHash[:])
+	keyB := h2.Sum(nil)
+
+	var encKey, decKey []byte
+	if isInitiator {
+		encKey = keyA
+		decKey = keyB
+	} else {
+		encKey = keyB
+		decKey = keyA
+	}
+
+	encCipher, err := rc4.NewCipher(encKey)
+	if err != nil {
+		return nil, err
+	}
+	decCipher, err := rc4.NewCipher(decKey)
+	if err != nil {
+		return nil, err
+	}
+
+	return &EncryptedConn{
+		Conn: conn,
+		enc:  encCipher,
+		dec:  decCipher,
+	}, nil
+}
+
+func (c *EncryptedConn) Read(b []byte) (n int, err error) {
+	n, err = c.Conn.Read(b)
+	if err == nil {
+		c.dec.XORKeyStream(b[:n], b[:n])
+	}
+	return
+}
+
+func (c *EncryptedConn) Write(b []byte) (n int, err error) {
+	buf := make([]byte, len(b))
+	c.enc.XORKeyStream(buf, b)
+	return c.Conn.Write(buf)
+}
+
+func AcceptIncoming(conn net.Conn, infoHash [20]byte) (*Client, error) {
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	defer conn.SetDeadline(time.Time{})
+
+	reader := bufio.NewReader(conn)
+	firstByte, err := reader.Peek(1)
+	if err != nil {
+		return nil, err
+	}
+
+	var wrappedConn net.Conn = &PeekConn{Conn: conn, r: reader}
+
+	if firstByte[0] != 0x13 {
+		fmt.Printf("[STAGE] AcceptIncoming: Encrypted incoming connection detected from %s\n", conn.RemoteAddr())
+		encConn, err := NewEncryptedConn(wrappedConn, infoHash, false)
+		if err != nil {
+			return nil, err
+		}
+		wrappedConn = encConn
+	}
+
+	pstrLenBuf := make([]byte, 1)
+	if _, err := io.ReadFull(wrappedConn, pstrLenBuf); err != nil {
+		return nil, err
+	}
+	pstrlen := int(pstrLenBuf[0])
+
+	remainingLen := pstrlen + 48
+	remainingBuf := make([]byte, remainingLen)
+	if _, err := io.ReadFull(wrappedConn, remainingBuf); err != nil {
+		return nil, err
+	}
+
+	resp := make([]byte, 1+remainingLen)
+	resp[0] = pstrLenBuf[0]
+	copy(resp[1:], remainingBuf)
+
+	recvHs, err := ReadHandshake(resp)
+	if err != nil {
+		return nil, err
+	}
+	if !bytes.Equal(recvHs.InfoHash[:], infoHash[:]) {
+		return nil, fmt.Errorf("info hash mismatch")
+	}
+
+	var peerID [20]byte
+	copy(peerID[:], []byte("-SD001-1234567890"))
+	hs := NewHandshake(infoHash, peerID)
+	_, err = wrappedConn.Write(hs.Serialize())
+	if err != nil {
+		return nil, err
+	}
+
+	return &Client{
+		Conn: wrappedConn,
+		State: PeerState{
+			Choked:     true,
+			LastActive: time.Now(),
+		},
+	}, nil
+}
 
 type Client struct {
 	Conn     net.Conn
@@ -19,6 +152,21 @@ func Connect(address string, infoHash [20]byte) (*Client, error) {
 }
 
 func ConnectTimeout(address string, infoHash [20]byte, timeout time.Duration) (*Client, error) {
+	if config.GlobalConfig.EnableEncryption {
+		encTimeout := timeout
+		if encTimeout > 3*time.Second {
+			encTimeout = 3 * time.Second
+		}
+		client, err := connectTimeoutWithEnc(address, infoHash, encTimeout, true)
+		if err == nil {
+			return client, nil
+		}
+		fmt.Printf("[STAGE] peer.Connect: Encrypted connection to %s failed (%v), falling back to plaintext...\n", address, err)
+	}
+	return connectTimeoutWithEnc(address, infoHash, timeout, false)
+}
+
+func connectTimeoutWithEnc(address string, infoHash [20]byte, timeout time.Duration, useEncryption bool) (*Client, error) {
 	conn, err := net.DialTimeout("tcp", address, timeout)
 	if err != nil {
 		return nil, err
@@ -29,42 +177,45 @@ func ConnectTimeout(address string, infoHash [20]byte, timeout time.Duration) (*
 		}
 	}()
 
-	fmt.Printf("[STAGE] peer.Connect: dial success to %s\n", address)
-
 	if timeout > 0 {
 		if err = conn.SetDeadline(time.Now().Add(timeout)); err != nil {
 			return nil, err
 		}
 	}
 
+	var wrappedConn net.Conn = conn
+	if useEncryption {
+		fmt.Printf("[STAGE] peer.Connect: Wrapping connection to %s in Encryption\n", address)
+		encConn, err := NewEncryptedConn(conn, infoHash, true)
+		if err != nil {
+			return nil, err
+		}
+		wrappedConn = encConn
+	}
+
 	var peerID [20]byte
 	copy(peerID[:], []byte("-SD001-1234567890"))
 	hs := NewHandshake(infoHash, peerID)
 
-	fmt.Printf("[STAGE] peer.Connect: sending handshake to %s\n", address)
-	_, err = conn.Write(hs.Serialize())
+	_, err = wrappedConn.Write(hs.Serialize())
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("[STAGE] peer.Connect: handshake sent to %s\n", address)
 
-	// Read the first byte to determine protocol string length
 	pstrLenBuf := make([]byte, 1)
-	_, err = io.ReadFull(conn, pstrLenBuf)
+	_, err = io.ReadFull(wrappedConn, pstrLenBuf)
 	if err != nil {
 		return nil, err
 	}
 	pstrlen := int(pstrLenBuf[0])
 
-	// Read the remaining handshake bytes (pstrlen + 48 bytes)
 	remainingLen := pstrlen + 48
 	remainingBuf := make([]byte, remainingLen)
-	_, err = io.ReadFull(conn, remainingBuf)
+	_, err = io.ReadFull(wrappedConn, remainingBuf)
 	if err != nil {
 		return nil, err
 	}
 
-	// Reassemble the complete handshake message
 	resp := make([]byte, 1+remainingLen)
 	resp[0] = pstrLenBuf[0]
 	copy(resp[1:], remainingBuf)
@@ -77,16 +228,14 @@ func ConnectTimeout(address string, infoHash [20]byte, timeout time.Duration) (*
 		return nil, fmt.Errorf("handshake verify fail")
 	}
 
-	fmt.Printf("[STAGE] peer.Connect: handshake received from %s (Pstr: %q)\n", address, recvHs.Pstr)
-
 	if timeout > 0 {
-		if err = conn.SetDeadline(time.Time{}); err != nil {
+		if err = wrappedConn.SetDeadline(time.Time{}); err != nil {
 			return nil, err
 		}
 	}
 
 	return &Client{
-		Conn: conn,
+		Conn: wrappedConn,
 		State: PeerState{
 			Choked:     true,
 			LastActive: time.Now(),
@@ -123,7 +272,13 @@ func (c *Client) ReadBitField(totalPieces int) error {
 	c.State.Bitfield = make([]bool, totalPieces)
 
 	for {
+		if c.Conn.RemoteAddr().Network() != "pipe" {
+			_ = c.Conn.SetReadDeadline(time.Now().Add(15 * time.Second))
+		}
 		msg, err := ReadMessage(c.Conn)
+		if c.Conn.RemoteAddr().Network() != "pipe" {
+			_ = c.Conn.SetReadDeadline(time.Time{})
+		}
 		if err != nil {
 			return err
 		}
