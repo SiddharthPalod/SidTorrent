@@ -16,3 +16,8 @@ uploads/
 # OS
 .DS_Store
 Thumbs.db
+
+# Frontend
+frontend/dist/
+frontend/node_modules/
+

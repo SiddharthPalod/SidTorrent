@@ -10,7 +10,7 @@ The recommended way to control SiddTorrent is via the built-in **Web Console**, 
 
 ### Start the Web & API Server
 ```powershell
-go run ./cmd/siddtorrent-api -addr 127.0.0.1:8081 -static web
+go run ./cmd/siddtorrent-api -addr 127.0.0.1:8081 -static frontend/dist
 ```
 Then, open your web browser and navigate to:
 👉 **[http://127.0.0.1:8081](http://127.0.0.1:8081)**
@@ -31,7 +31,7 @@ Developers can configure hidden advanced properties (such as ports, connection c
 To run the frontend in development mode with Hot Module Replacement (HMR):
 1. **Start the Go Backend Server:**
    ```powershell
-   go run ./cmd/siddtorrent-api -addr 127.0.0.1:8081 -static web
+   go run ./cmd/siddtorrent-api -addr 127.0.0.1:8081 -static frontend/dist
    ```
 2. **Start the Vite Dev Server:**
    ```powershell
@@ -41,11 +41,13 @@ To run the frontend in development mode with Hot Module Replacement (HMR):
 3. Open 👉 **[http://localhost:5173](http://localhost:5173)** in your browser. All UI changes will hot-reload instantly, and api calls will be proxied to the Go server on port 8081.
 
 ### Build for Production
-To bundle the React frontend into static assets and deploy them directly to the Go server's static directory (`web/`):
+To bundle the React frontend into static assets:
 ```powershell
 cd frontend
 npm run build
 ```
+
+The Go server serves from the compiled directory (`frontend/dist`) by default.
 
 ---
 

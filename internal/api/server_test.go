@@ -13,7 +13,7 @@ import (
 )
 
 func TestHealthIncludesCORSForLocalhost(t *testing.T) {
-	server := NewServer(filepath.Join("..", "..", "web"))
+	server := NewServer(filepath.Join("..", "..", "frontend", "dist"))
 	req := httptest.NewRequest(http.MethodOptions, "/api/health", nil)
 	req.Header.Set("Origin", "http://localhost:5173")
 	rec := httptest.NewRecorder()
@@ -29,7 +29,7 @@ func TestHealthIncludesCORSForLocalhost(t *testing.T) {
 }
 
 func TestInspectTorrent(t *testing.T) {
-	server := NewServer(filepath.Join("..", "..", "web"))
+	server := NewServer(filepath.Join("..", "..", "frontend", "dist"))
 	body := bytes.NewBufferString(`{"path":"../../testdata/ubuntu.torrent"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/torrents/inspect", body)
 	rec := httptest.NewRecorder()
@@ -60,7 +60,7 @@ func TestInspectTorrent(t *testing.T) {
 }
 
 func TestUploadTorrent(t *testing.T) {
-	server := NewServer(filepath.Join("..", "..", "web"))
+	server := NewServer(filepath.Join("..", "..", "frontend", "dist"))
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, err := writer.CreateFormFile("torrent", "ubuntu.torrent")

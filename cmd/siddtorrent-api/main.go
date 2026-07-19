@@ -13,7 +13,7 @@ func main() {
 	var addr string
 	var staticDir string
 	flag.StringVar(&addr, "addr", "127.0.0.1:8080", "address for the web UI and API")
-	flag.StringVar(&staticDir, "static", "web", "directory containing frontend assets")
+	flag.StringVar(&staticDir, "static", "frontend/dist", "directory containing frontend assets")
 	flag.Parse()
 
 	fmt.Printf("SiddTorrent web console listening on http://%s\n", addr)

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -332,6 +333,9 @@ func (s *JobStore) List() []*Job {
 	for _, job := range s.jobs {
 		jobs = append(jobs, cloneJob(job))
 	}
+	sort.Slice(jobs, func(i, j int) bool {
+		return jobs[i].CreatedAt > jobs[j].CreatedAt
+	})
 	return jobs
 }
 
