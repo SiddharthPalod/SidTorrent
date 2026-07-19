@@ -24,7 +24,7 @@ export default function LaunchForm({
           <button 
             type="button"
             onClick={() => fileInputRef.current?.click()}
-            className="px-3 py-1 font-mono font-bold text-[0.75rem]  text-[var(--acid)] border border-[var(--acid)] rounded hover:bg-[var(--cyan)]/15 transition cursor-pointer shrink-0"
+            className="px-3 py-1 font-mono font-bold text-[0.75rem]  text-[var(--acid)] border border-[var(--acid)] rounded hover:bg-[var(--acid)]/15 transition cursor-pointer shrink-0"
           >
             📂 SELECT FILE
           </button>
@@ -51,7 +51,7 @@ export default function LaunchForm({
               <button
                 type="button"
                 onClick={() => folderInputRef.current?.click()}
-                className="px-3 py-1 font-mono font-bold text-[0.75rem] text-[var(--acid)] border border-[var(--acid)] rounded hover:bg-[var(--cyan)]/15 transition cursor-pointer shrink-0"
+                className="px-3 py-1 font-mono font-bold text-[0.75rem] text-[var(--acid)] border border-[var(--acid)] rounded hover:bg-[var(--acid)]/15 transition cursor-pointer shrink-0"
               >
                 📂 SELECT FOLDER
               </button>
