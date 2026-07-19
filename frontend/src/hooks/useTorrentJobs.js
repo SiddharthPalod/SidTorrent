@@ -79,6 +79,7 @@ export function useTorrentJobs() {
 
   const playVideo = (jobId) => {
     setPlayingJobId(jobId);
+    setActiveTab('video');  // auto-switch to video tab when user clicks play
   };
 
   // Setup periodic refresh
@@ -102,7 +103,7 @@ export function useTorrentJobs() {
     try {
       const jobs = await getJobs();
       dispatch({ type: ActionTypes.SET_JOBS, payload: jobs });
-      
+
       const activeJobId = activeJobIdRef.current;
       const active = jobs.find((job) => job.id === activeJobId);
       if (active && active.status) {
@@ -114,6 +115,16 @@ export function useTorrentJobs() {
         dispatch({ type: ActionTypes.SET_PHASE, payload: "idle" });
         dispatch({ type: ActionTypes.SET_MESSAGE, payload: "Awaiting torrent coordinates" });
       }
+
+      // Auto-select and switch to first video job that becomes ready
+      setPlayingJobId((prev) => {
+        const firstVideo = jobs.find((j) => j.isVideo && j.state !== 'failed');
+        if (!prev && firstVideo) {
+          setActiveTab('video');
+          return firstVideo.id;
+        }
+        return prev;
+      });
     } catch (err) {
       console.error("Error refreshing jobs:", err);
     }
