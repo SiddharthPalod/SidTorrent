@@ -1,4 +1,5 @@
 import React from 'react';
+import { FiPlayCircle } from "react-icons/fi";
 
 export default function VideoPlayer({ jobs, playingJob, onPlayVideo }) {
   const videoJobs = jobs.filter((job) => job.isVideo && job.state !== 'failed').reverse();
@@ -55,8 +56,13 @@ export default function VideoPlayer({ jobs, playingJob, onPlayVideo }) {
         ) : (
           <>
             <div className="flex justify-between items-center gap-3.5 border-b border-[var(--line)] pb-3 shrink-0">
-              <h2 className="text-base  text-[var(--acid)] m-0 font-bold truncate max-w-[80%] uppercase">
-                📺 {playingJob.videoName || playingJob.status?.torrentName || 'Video Stream'}
+              <h2 className="text-base flex flex-row items-center gap-2 text-[var(--acid)] m-0 font-bold truncate max-w-[80%] uppercase">
+                <FiPlayCircle className="shrink-0 text-lg" />
+                <span className="truncate">
+                  {playingJob.videoName ||
+                    playingJob.status?.torrentName ||
+                    "Video Stream"}
+                </span>
               </h2>
               <span className="text-[0.78rem] uppercase text-[var(--acid)] font-bold">{playingJob.state}</span>
             </div>

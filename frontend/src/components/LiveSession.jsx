@@ -12,7 +12,7 @@ export default function LiveSession({
   return (
     <article className="flex-1 md:flex-[0.5] min-w-[200px] border border-[var(--line)] rounded bg-[var(--panel)]">
       <div className="flex justify-between items-center gap-3.5 min-h-[56px] px-4 border-b border-[var(--line)]">
-        <h2 className="text-base  text-[var(--acid)] m-0 font-bold">Live Session</h2>
+        <h2 className="text-base  text-[var(--text)] m-0 font-bold">Live Session</h2>
         <button 
           className="bg-transparent border border-[var(--acid)] rounded text-[var(--acid)] px-4 py-1.5 font-bold font-mono text-[0.8rem] cursor-pointer hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed transition" 
           id="cancel-btn" 
