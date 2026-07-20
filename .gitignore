@@ -1,6 +1,8 @@
 # downloads
 downloads/
 uploads/
+testdata/
+Helpful_files/
 
 # binaries
 *.iso

@@ -4,6 +4,8 @@ SiddTorrent is a feature-rich, high-performance BitTorrent engine and web consol
 
 ---
 
+[Demo Video](https://youtu.be/J4hbMuCiYVo)  
+
 ## 🚀 Primary Interface: Web Console
 
 The recommended way to control SiddTorrent is via the built-in **Web Console**, which acts as the main control surface. It features a modern SPA (Single Page Application) dashboard to upload `.torrent` files, view real-time swarm download percentages, manage active download jobs, and toggle advanced download engine components.
